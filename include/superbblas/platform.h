@@ -35,22 +35,6 @@
 #    define __DEVICE__
 #endif
 
-#if !defined(SUPERBBLAS_CREATING_FLAGS) && !defined(SUPERBBLAS_CREATING_LIB)
-#    ifdef SUPERBBLAS_USE_CUDA
-#        include <cublas_v2.h>
-#        include <cuda_runtime.h>
-#        include <cusolverDn.h>
-#        include <cusparse.h>
-#    endif
-
-#    ifdef SUPERBBLAS_USE_HIP
-#        include <hip/hip_runtime_api.h>
-#        include <hipsparse/hipsparse.h>
-#        include <rocblas/rocblas.h>
-#        include <rocsolver/rocsolver.h>
-#    endif
-#endif // SUPERBBLAS_CREATING_FLAGS
-
 #ifdef SUPERBBLAS_CREATING_FLAGS
 #    if defined(SUPERBBLAS_USE_CUDA)
 EMIT_define(SUPERBBLAS_USE_CUDA)
@@ -72,6 +56,22 @@ EMIT_define(SUPERBBLAS_USE_MKL)
 #        undef SUPERBBLAS_USE_HIP
 #    endif
 #endif
+
+#if !defined(SUPERBBLAS_CREATING_FLAGS) && !defined(SUPERBBLAS_CREATING_LIB)
+#    ifdef SUPERBBLAS_USE_CUDA
+#        include <cublas_v2.h>
+#        include <cuda_runtime.h>
+#        include <cusolverDn.h>
+#        include <cusparse.h>
+#    endif
+
+#    ifdef SUPERBBLAS_USE_HIP
+#        include <hip/hip_runtime_api.h>
+#        include <hipsparse/hipsparse.h>
+#        include <rocblas/rocblas.h>
+#        include <rocsolver/rocsolver.h>
+#    endif
+#endif // SUPERBBLAS_CREATING_FLAGS
 
 #if defined(SUPERBBLAS_USE_CUDA) || defined(SUPERBBLAS_USE_HIP)
 #    define SUPERBBLAS_USE_GPU
