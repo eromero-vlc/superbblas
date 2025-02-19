@@ -206,6 +206,12 @@ namespace superbblas {
             return r;
         }
 
+        template <std::size_t N> Coor<N> zeros() {
+            Coor<N> r;
+            for (auto &c : r) c = 0;
+            return r;
+        }
+
 #ifdef SUPERBBLAS_USE_THRUST
         struct ns_plus_aux {
             template <std::size_t Nd, typename std::enable_if<(Nd > 1), bool>::type = true>
