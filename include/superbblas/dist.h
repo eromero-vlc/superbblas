@@ -1468,10 +1468,6 @@ namespace superbblas {
                    v1ToReceive.buf.size() * sizeof(Q));
             assert(v0ToSend.counts[comm.rank] == 0);
             assert(v1ToReceive.counts[comm.rank] == 0);
-            assert(align(dtype_size, v0ToSend.buf.size() * sizeof(T), v0ToSend.buf.data(),
-                         v0ToSend.buf.size() * sizeof(T)) == v0ToSend.buf.data());
-            assert(align(dtype_size, v1ToReceive.buf.size() * sizeof(Q), v1ToReceive.buf.data(),
-                         v1ToReceive.buf.size() * sizeof(Q)) == v1ToReceive.buf.data());
             if (getDebugLevel() > 0) {
                 // Check that all processes agree in the amount of data to send/receive
                 std::vector<int> send_counts(comm.rank == 0 ? comm.nprocs * comm.nprocs : 0);
@@ -1717,30 +1713,33 @@ namespace superbblas {
             if (use_mpi_gpu) {
                 // Check if there are gpu components
                 for (const auto &it : v0.first)
-                    if (deviceId(it.it.ctx()) >= 0) really_use_mpi_gpu = true;
+                    if (deviceId(it.it.ctx()) >= 0 && it.it.size() > 0) really_use_mpi_gpu = true;
                 for (const auto &it : v1.first)
-                    if (deviceId(it.it.ctx()) >= 0) really_use_mpi_gpu = true;
+                    if (deviceId(it.it.ctx()) >= 0 && it.it.size() > 0) really_use_mpi_gpu = true;
             }
 
             // Use mpi send/receive buffers on cpu memory
             if (!really_use_mpi_gpu) {
 #ifdef SUPERBBLAS_USE_GPU
-                // Make the sender/receiver buffers on host pinned memory to improve the transfer rates copying
-                // data from/to the gpus
-                if (v0.first.size() > 0) {
-                    Gpu gpu0 = v0.first.front().it.ctx().toCpuPinned();
-                    if (v1.first.size() > 0) {
-                        return send_receive_choose_size(o0, toSend, v0, gpu0, o1, toReceive, v1,
+                if (volume(toSend) * sizeof(T) + volume(toReceive) * sizeof(Q) <=
+                    getMaxGpuCacheSize()) {
+                    // Make the sender/receiver buffers on host pinned memory to improve the transfer rates copying
+                    // data from/to the gpus
+                    if (v0.first.size() > 0 && v0.first.front().it.size() > 0) {
+                        Gpu gpu0 = v0.first.front().it.ctx().toCpuPinned();
+                        if (v1.first.size() > 0 && v1.first.front().it.size() > 0) {
+                            return send_receive_choose_size(o0, toSend, v0, gpu0, o1, toReceive, v1,
+                                                            v1.first.front().it.ctx().toCpuPinned(),
+                                                            comm, EWOp{}, co, alpha);
+                        } else {
+                            return send_receive_choose_size(o0, toSend, v0, gpu0, o1, toReceive, v1,
+                                                            Cpu{}, comm, EWOp{}, co, alpha);
+                        }
+                    } else if (v1.first.size() > 0 && v1.first.front().it.size() > 0) {
+                        return send_receive_choose_size(o0, toSend, v0, Cpu{}, o1, toReceive, v1,
                                                         v1.first.front().it.ctx().toCpuPinned(),
                                                         comm, EWOp{}, co, alpha);
-                    } else {
-                        return send_receive_choose_size(o0, toSend, v0, gpu0, o1, toReceive, v1,
-                                                        Cpu{}, comm, EWOp{}, co, alpha);
                     }
-                } else if (v1.first.size() > 0) {
-                    return send_receive_choose_size(o0, toSend, v0, Cpu{}, o1, toReceive, v1,
-                                                    v1.first.front().it.ctx().toCpuPinned(), comm,
-                                                    EWOp{}, co, alpha);
                 }
 #endif // SUPERBBLAS_USE_GPU
                 return send_receive_choose_size(o0, toSend, v0, Cpu{}, o1, toReceive, v1, Cpu{},
@@ -1752,7 +1751,7 @@ namespace superbblas {
             XPU0 gpu;
             bool found_it = false;
             for (const auto &it : v0.first) {
-                if (deviceId(it.it.ctx()) >= 0) {
+                if (deviceId(it.it.ctx()) >= 0 && it.it.size() > 0) {
                     gpu = it.it.ctx();
                     found_it = true;
                     break;
@@ -1760,14 +1759,14 @@ namespace superbblas {
             }
             if (!found_it) {
                 for (const auto &it : v1.first) {
-                    if (deviceId(it.it.ctx()) >= 0) {
+                    if (deviceId(it.it.ctx()) >= 0 && it.it.size() > 0) {
                         gpu = it.it.ctx();
                         found_it = true;
                         break;
                     }
                 }
             }
-            assert(found_it);
+            if (!found_it) throw std::runtime_error("wtf");
             return send_receive_choose_size(o0, toSend, v0, gpu, o1, toReceive, v1, gpu, comm,
                                             EWOp{}, co, alpha);
         }
@@ -3269,6 +3268,40 @@ namespace superbblas {
             return true;
         }
 
+        // Remove self-intersections
+        /// \param p: partitioning
+        /// \param dim: dimensions
+
+        template <std::size_t Nd>
+        Proc_ranges<Nd> remove_repetitions(const Proc_ranges<Nd> &p, const Coor<Nd> &dim) {
+            Proc_ranges<Nd> r(p.size());
+            for (unsigned int i = 0; i < p.size(); ++i) {
+                for (unsigned int i0 = 0; i0 < p[i].size(); ++i0) {
+                    From_size<Nd> fs(1, p[i][i0]);
+                    for (unsigned int j = 0; j <= i; ++j) {
+                        for (unsigned int j0 = 0, j1 = (j < i ? p[j].size() : i0); j0 < j1; ++j0) {
+                            From_size<Nd> fsr;
+                            for (unsigned int fsi = 0; fsi < fs.size(); ++fsi) {
+                                if (volume(intersection(fs[fsi][0], fs[fsi][1], p[j][j0][0],
+                                                        p[j][j0][1], dim)) == 0) {
+                                    fsr.push_back(fs[fsi]);
+                                } else {
+                                    // make hole
+                                    auto new_fs = make_hole(fs[fsi][0], fs[fsi][1], p[j][j0][0],
+                                                            p[j][j0][1], dim);
+                                    for (const auto &fsi_ : new_fs) fsr.push_back(fsi_);
+                                }
+                            }
+                            fs = fsr;
+                        }
+                    }
+                    for (const auto &fsi : fs) r[i].push_back(fsi);
+                }
+            }
+
+            return r;
+        }
+
         /// Return partitions for the input tensors that are compatible for contraction
         /// \param p0: partitioning of the first origin tensor in consecutive ranges
         /// \param o0: dimension labels for the first operator
@@ -3291,11 +3324,36 @@ namespace superbblas {
 
             // Normalize the first tensor as the larger of the two in volume
             if (volume(size0) < volume(size1)) {
-                auto p10 =
+                const auto &p10 =
                     get_partitions_for_contraction(p1, from1, size1, dim1, o1, sug_o1, p0, from0,
                                                    size0, dim0, o0, sug_o0, dim2, o2, o_r);
                 return {std::get<1>(p10), std::get<0>(p10), std::get<2>(p10)};
             }
+
+            using Key = std::tuple<Proc_ranges<Nd0>, Coor<Nd0>, Coor<Nd0>, Coor<Nd0>, Coor<Nd0>, //
+                                   Proc_ranges<Nd1>, Coor<Nd1>, Coor<Nd1>, Coor<Nd1>, Coor<Nd1>, //
+                                   Coor<Nd2>, PairPerms<Nd2, Ndo>, PairPerms<Nd0, Nd1>,
+                                   PairPerms<Nd1, Nd2>, PairPerms<Nd0, Nd2>>;
+            using Value = std::tuple<Proc_ranges<Nd0>, Proc_ranges<Nd1>, Proc_ranges<Ndo>>;
+            struct cache_tag {};
+            auto cache = getCache<Key, Value, TupleHash<Key>, cache_tag>(Cpu{});
+            Key key{p0,
+                    from0,
+                    size0,
+                    dim0,
+                    find_permutation(o0, sug_o0), //
+                    p1,
+                    from1,
+                    size1,
+                    dim1,
+                    find_permutation(o1, sug_o1), //
+                    dim2,
+                    get_perms(o2, o_r), //
+                    get_perms(o0, o1),
+                    get_perms(o1, o2),
+                    get_perms(o0, o2)};
+            auto it = cache.find(key);
+            if (it != cache.end()) { return it->second.value; }
 
             // Reorder the first tensor if needed
             Proc_ranges<Nd0> p0_ = remove_repetitions(p0, dim0);
@@ -3328,7 +3386,31 @@ namespace superbblas {
             }
 
             // Return
-            return {p0r, p1r, pr};
+            auto r = std::make_tuple(p0r, p1r, pr);
+            cache.insert(key, r, 0);
+            return r;
+        }
+
+        /// Return whether some ranges to receive overlaps
+        /// \param p: partition
+        /// \param dim: dimensions of the destination tensor
+
+        template <std::size_t Nd>
+        bool does_proc_ranges_self_intersect(const Proc_ranges<Nd> &p, const Coor<Nd> &dim) {
+
+            for (unsigned int pi = 0; pi < p.size(); ++pi) {
+                for (unsigned int fsi = 0; fsi < p[pi].size(); ++fsi) {
+                    for (unsigned int pj = pi; pj < p.size(); ++pj) {
+                        for (unsigned int fsj = pi == pj ? fsi + 1 : 0; fsj < p[pj].size(); ++fsj) {
+                            if (volume(intersection(p[pi][fsi][0], p[pi][fsi][1], //
+                                                    p[pj][fsj][0], p[pj][fsj][1], dim)) > 0)
+                                return true;
+                        }
+                    }
+                }
+            }
+
+            return false;
         }
 
         template <std::size_t Nd, typename T, typename Comm, typename XPU0, typename XPU1>
@@ -3383,14 +3465,11 @@ namespace superbblas {
             Coor<Nd> sug_size1 = reorder_coor(size1, find_permutation(o1, sug_o1));
             Coor<Nd> sug_sizer = reorder_coor(sizer, find_permutation(o_r, sug_or));
 
-            // Scale the output tensor by beta
-            copy<Nd, Nd, T>(beta, pr, fromr, sizer, dimr, o_r, toConst(vr), pr, fromr, dimr, o_r,
-                            vr, comm, EWOp::Copy{}, co);
-
             // Change the partition of the input tensors so that the local portions to contract
             // are local
-            auto p01 = get_partitions_for_contraction(p0, from0, size0, dim0, o0, sug_o0, p1, from1,
-                                                      size1, dim1, o1, sug_o1, dimr, o_r, sug_or);
+            const auto &p01 =
+                get_partitions_for_contraction(p0, from0, size0, dim0, o0, sug_o0, p1, from1, size1,
+                                               dim1, o1, sug_o1, dimr, o_r, sug_or);
             const auto &p0_ = std::get<0>(p01);
             const auto &p1_ = std::get<1>(p01);
             Components_tmpl<Nd, T, XPU0, XPU1> v0_ =
@@ -3400,10 +3479,21 @@ namespace superbblas {
                 reorder_tensor(p1, o1, from1, size1, dim1, v1, p1_, sug_size1, sug_o1, v0_, comm,
                                co, avoidCopy, doCacheAlloc);
 
-            // Generate the partitioning and the storage for the output tensor
+            // Try to avoid the extra allocation
             const auto &pr_ = std::get<2>(p01);
+            bool avoid_r_alloc =
+                (std::norm(beta) == 0 && fromr == Coor<Nd>{{}} && dimr == sizer && sug_or == o_r &&
+                 pr == pr_ && !does_proc_ranges_self_intersect(pr, dimr));
+
+            // Scale the output tensor by beta
+            if (!avoid_r_alloc) {
+                copy<Nd, Nd, T>(beta, pr, fromr, sizer, dimr, o_r, toConst(vr), pr, fromr, dimr,
+                                o_r, vr, comm, EWOp::Copy{}, co);
+            }
+
+            // Generate the partitioning and the storage for the output tensor
             Components_tmpl<Nd, T, XPU0, XPU1> vr_ =
-                like_this_components(pr_, v0_, comm, doCacheAlloc);
+                avoid_r_alloc ? vr : like_this_components(pr_, v0_, comm, doCacheAlloc);
 
             for (unsigned int i = 0; i < v0_.first.size(); ++i) {
                 const unsigned int componentId = v0_.first[i].componentId;
@@ -3411,7 +3501,8 @@ namespace superbblas {
                     alpha, sug_o0, p0_[comm.rank][componentId][1], conj0,
                     vector<const T, XPU0>(v0_.first[i].it), Nd0, sug_o1,
                     p1_[comm.rank][componentId][1], conj1, vector<const T, XPU0>(v1_.first[i].it),
-                    Nd1, T{0.0}, sug_or, pr_[comm.rank][componentId][1], vr_.first[i].it, Ndo, co);
+                    Nd1, avoid_r_alloc ? beta : T{0}, sug_or, pr_[comm.rank][componentId][1],
+                    vr_.first[i].it, Ndo, co);
             }
             for (unsigned int i = 0; i < v0_.second.size(); ++i) {
                 const unsigned int componentId = v0_.second[i].componentId;
@@ -3419,13 +3510,17 @@ namespace superbblas {
                     alpha, sug_o0, p0_[comm.rank][componentId][1], conj0,
                     vector<const T, XPU1>(v0_.second[i].it), Nd0, sug_o1,
                     p1_[comm.rank][componentId][1], conj1, vector<const T, XPU1>(v1_.second[i].it),
-                    Nd1, T{0.0}, sug_or, pr_[comm.rank][componentId][1], vr_.second[i].it, Ndo, co);
+                    Nd1, avoid_r_alloc ? beta : T{0}, sug_or, pr_[comm.rank][componentId][1],
+                    vr_.second[i].it, Ndo, co);
             }
 
-            // Scale the output tensor by beta and reduce all the subtensors to the final tensor
-            Request req = copy_request_normalized<Nd, Nd, T>(1, pr_, {{}}, sug_sizer, sug_sizer,
-                                                             sug_or, toConst(vr_), pr, fromr, dimr,
-                                                             o_r, vr, comm, EWOp::Add{}, co);
+            // Reduce all the subtensors to the final tensor
+            Request req;
+            if (!avoid_r_alloc) {
+                req = copy_request_normalized<Nd, Nd, T>(1, pr_, {{}}, sug_sizer, sug_sizer, sug_or,
+                                                         toConst(vr_), pr, fromr, dimr, o_r, vr,
+                                                         comm, EWOp::Add{}, co);
+            }
 
             _t.stop();
             if (getDebugLevel() >= 1) {
