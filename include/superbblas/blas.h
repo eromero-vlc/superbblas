@@ -898,22 +898,23 @@ namespace superbblas {
         })
 #endif
 
-        /// Return a new array with only the elements w[i] that mask[v[i]] != 0
+        /// Return a new array with only the elements w[i] that m[disp+v[i]] != 0
         /// \param v: vector of indices used by the mask
-        /// \param mask: vector of size v[v.size()-1]
+        /// \param m: vector of size v[disp+v.size()-1]
+        /// \param disp: displacement on m
         /// \param w: vector of indices to return
         /// \return: a new vector
 
         template <typename IndexType, typename T>
-        vector<IndexType, Cpu> select(const vector<IndexType, Cpu> &v, const T *m,
-                                      const vector<IndexType, Cpu> &w) {
+        vector<IndexType, Cpu> select(const vector<IndexType, Cpu> &v, const vector<T, Cpu> &m,
+                                      IndexType disp, const vector<IndexType, Cpu> &w) {
             vector<IndexType, Cpu> r{w.size(), Cpu{}};
             const IndexType *pv = v.data();
             const IndexType *pw = w.data();
             IndexType *pr = r.data();
             std::size_t n = w.size(), nr = 0;
             for (std::size_t i = 0; i < n; ++i)
-                if (m[pv[i]] != 0) pr[nr++] = pw[i];
+                if (m[disp + pv[i]] != 0) pr[nr++] = pw[i];
             r.resize(nr);
             return r;
         }
@@ -927,28 +928,33 @@ namespace superbblas {
         };
 #    endif
 
-        /// Return a new array with only the elements w[i] that mask[v[i]] != 0
+        /// Return a new array with only the elements w[i] that m[disp+v[i]] != 0
         /// \param v: vector of indices used by the mask
-        /// \param mask: vector of size v[v.size()-1]
+        /// \param m: vector of size v[disp+v.size()-1]
+        /// \param disp: displacement on m
         /// \param w: vector of indices to return
         /// \return: a new vector
 
+
         template <typename IndexType, typename T>
-        DECL_SELECT_T(vector<IndexType, Gpu> select(const vector<IndexType, Gpu> &v, T *m,
+        DECL_SELECT_T(vector<IndexType, Gpu> select(const vector<IndexType, Gpu> &v,
+                                                    const vector<T, Gpu> &m, IndexType disp,
                                                     const vector<IndexType, Gpu> &w))
         IMPL({
-            causalConnectTo(w.ctx(), v.ctx());
+            auto m0 = makeSure(m, v.ctx());
+            auto w0 = makeSure(w, v.ctx());
             setDevice(v.ctx());
-            vector<IndexType, Gpu> r{w.size(), v.ctx()};
+            vector<IndexType, Gpu> r{w0.size(), v.ctx()};
             auto itv = encapsulate_pointer(v.begin());
-            auto itm = encapsulate_pointer(m);
-            auto itw = encapsulate_pointer(w.begin());
+            auto itm = encapsulate_pointer(m0.begin());
+            auto itw = encapsulate_pointer(w0.begin());
             auto itr = encapsulate_pointer(r.begin());
-            auto itmv = thrust::make_permutation_iterator(itm, itv);
+            auto itmv = thrust::make_permutation_iterator(itm + disp, itv);
             auto itr_end = thrust::copy_if(thrust_par_on(v.ctx()), itw, itw + w.size(), itmv, itr,
                                            not_zero<T>{});
             r.resize(itr_end - itr);
-            causalConnectTo(v.ctx(), w.ctx());
+            causalConnectTo(v.ctx(), w0.ctx());
+            causalConnectTo(v.ctx(), m0.ctx());
             return r;
         })
 #endif // SUPERBBLAS_USE_GPU

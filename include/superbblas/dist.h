@@ -944,9 +944,8 @@ namespace superbblas {
                             IndicesT<IndexType, Cpu> indices0i_mask = indices0i.first;
                             IndexType indices0i_disp = indices0i.second;
                             if (mask0_cpu.size() > 0)
-                                indices0i_mask =
-                                    select(indices0i.first, mask0_cpu.data() + indices0i_disp,
-                                           indices0i_mask);
+                                indices0i_mask = select(indices0i.first, mask0_cpu, indices0i_disp,
+                                                        indices0i_mask);
                             std::transform(indices0i_mask.begin(), indices0i_mask.end(),
                                            indices0.begin() + n,
                                            [=](IndexType d) { return d + indices0i_disp; });
@@ -958,9 +957,8 @@ namespace superbblas {
                             IndicesT<IndexType, Cpu> indices1i_mask = indices1i.first;
                             IndexType indices1i_disp = indices1i.second;
                             if (mask0_cpu.size() > 0)
-                                indices1i_mask =
-                                    select(indices0i.first, mask0_cpu.data() + indices0i_disp,
-                                           indices1i_mask);
+                                indices1i_mask = select(indices0i.first, mask0_cpu, indices0i_disp,
+                                                        indices1i_mask);
                             IndexType dispi = disp1[rank] + indices1i_disp;
                             std::transform(indices1i_mask.begin(), indices1i_mask.end(),
                                            indices1_cpu.begin() + n,
@@ -1239,8 +1237,7 @@ namespace superbblas {
 
                                 // Apply the masks
                                 if (masks[dstrange].size() > 0)
-                                    indices1 =
-                                        select(indices1, masks[dstrange].data() + disp, indices1);
+                                    indices1 = select(indices1, masks[dstrange], disp, indices1);
                                 else
                                     indices1 = clone(indices1);
 
