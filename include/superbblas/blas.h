@@ -893,7 +893,7 @@ namespace superbblas {
         DECL_SUM_T(T sum(const vector<T, Gpu> &v))
         IMPL({
             if (deviceId(v.ctx()) == CPU_DEVICE_ID) {
-                syn(v.ctx());
+                sync(v.ctx());
                 T s{0};
                 const T *p = v.data();
                 for (std::size_t i = 0, n = v.size(); i < n; ++i) s += p[i];
