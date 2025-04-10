@@ -892,9 +892,17 @@ namespace superbblas {
         template <typename T>
         DECL_SUM_T(T sum(const vector<T, Gpu> &v))
         IMPL({
-            setDevice(v.ctx());
-            auto it = encapsulate_pointer(v.begin());
-            return thrust::reduce(thrust_par_on(v.ctx()), it, it + v.size());
+            if (deviceId(v.ctx()) == CPU_DEVICE_ID) {
+                syn(v.ctx());
+                T s{0};
+                const T *p = v.data();
+                for (std::size_t i = 0, n = v.size(); i < n; ++i) s += p[i];
+                return s;
+            } else {
+                setDevice(v.ctx());
+                auto it = encapsulate_pointer(v.begin());
+                return thrust::reduce(thrust_par_on(v.ctx()), it, it + v.size());
+            }
         })
 #endif
 
@@ -914,7 +922,7 @@ namespace superbblas {
             IndexType *pr = r.data();
             std::size_t n = w.size(), nr = 0;
             for (std::size_t i = 0; i < n; ++i)
-                if (m[disp + pv[i]] != 0) pr[nr++] = pw[i];
+                if (m[disp + pv[i]] != T{0}) pr[nr++] = pw[i];
             r.resize(nr);
             return r;
         }
@@ -945,14 +953,26 @@ namespace superbblas {
             auto w0 = makeSure(w, v.ctx());
             setDevice(v.ctx());
             vector<IndexType, Gpu> r{w0.size(), v.ctx()};
-            auto itv = encapsulate_pointer(v.begin());
-            auto itm = encapsulate_pointer(m0.begin());
-            auto itw = encapsulate_pointer(w0.begin());
-            auto itr = encapsulate_pointer(r.begin());
-            auto itmv = thrust::make_permutation_iterator(itm + disp, itv);
-            auto itr_end = thrust::copy_if(thrust_par_on(v.ctx()), itw, itw + w.size(), itmv, itr,
-                                           not_zero<T>{});
-            r.resize(itr_end - itr);
+            if (deviceId(v.ctx()) == CPU_DEVICE_ID) {
+                sync(v.ctx());
+                const IndexType *pv = v.data();
+                const IndexType *pw = w0.data();
+                const T *pm = m0.data();
+                IndexType *pr = r.data();
+                std::size_t n = w0.size(), nr = 0;
+                for (std::size_t i = 0; i < n; ++i)
+                    if (pm[disp + pv[i]] != T{0}) pr[nr++] = pw[i];
+                r.resize(nr);
+            } else {
+                auto itv = encapsulate_pointer(v.begin());
+                auto itm = encapsulate_pointer(m0.begin());
+                auto itw = encapsulate_pointer(w0.begin());
+                auto itr = encapsulate_pointer(r.begin());
+                auto itmv = thrust::make_permutation_iterator(itm + disp, itv);
+                auto itr_end = thrust::copy_if(thrust_par_on(v.ctx()), itw, itw + w.size(), itmv,
+                                               itr, not_zero<T>{});
+                r.resize(itr_end - itr);
+            }
             causalConnectTo(v.ctx(), w0.ctx());
             causalConnectTo(v.ctx(), m0.ctx());
             return r;
@@ -994,10 +1014,20 @@ namespace superbblas {
         template <typename T, typename std::enable_if<is_complex<T>::value, bool>::type = false>
         DECL_CONJ_T(void conj(vector<T, Gpu> &v))
         IMPL({
-            setDevice(v.ctx());
-            auto itv = encapsulate_pointer(v.begin());
-            thrust::transform(thrust_par_on(v.ctx()), itv, itv + v.size(), itv,
-                              thrust_conj<typename cuda_complex<T>::type>{});
+            if (deviceId(v.ctx()) == CPU_DEVICE_ID) {
+                launchHostKernel(
+                    [=] {
+                        auto *p = v.data();
+                        std::size_t n = v.size();
+                        for (std::size_t i = 0; i < n; ++i) p[i] = std::conj(p[i]);
+                    },
+                    v.ctx());
+            } else {
+                setDevice(v.ctx());
+                auto itv = encapsulate_pointer(v.begin());
+                thrust::transform(thrust_par_on(v.ctx()), itv, itv + v.size(), itv,
+                                  thrust_conj<typename cuda_complex<T>::type>{});
+            }
         })
 #endif // SUPERBBLAS_USE_GPU
 
