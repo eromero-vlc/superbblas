@@ -3336,10 +3336,26 @@ namespace superbblas {
             auto t0 = dummy_normalize_copy<Nd>(p0, from0, size0, dim0, o0, v0, m);
             auto t1 = dummy_normalize_copy<Nd>(p1, from1, size1, dim1, o1, v1, m);
             auto tr = dummy_normalize_copy<Nd>(pr, fromr, sizer, dimr, o_r, vr, m);
+            std::size_t Nd0c, Nd1c, Ndoc;
+            for (Nd0c = std::min(Nd0, 1ul); Nd0c < Nd0; ++Nd0c) {
+                if (std::find(o1.begin(), o1.end(), o0[Nd0c]) != o1.end()) continue;
+                if (std::find(o_r.begin(), o_r.end(), o0[Nd0c]) != o_r.end()) continue;
+                break;
+            }
+            for (Nd1c = std::min(Nd1, 1ul); Nd1c < Nd1; ++Nd1c) {
+                if (std::find(o0.begin(), o0.end(), o1[Nd1c]) != o0.end()) continue;
+                if (std::find(o_r.begin(), o_r.end(), o1[Nd1c]) != o_r.end()) continue;
+                break;
+            }
+            for (Ndoc = std::min(Ndo, 1ul); Ndoc < Ndo; ++Ndoc) {
+                if (std::find(o0.begin(), o0.end(), o_r[Ndoc]) != o0.end()) continue;
+                if (std::find(o1.begin(), o1.end(), o_r[Ndoc]) != o1.end()) continue;
+                break;
+            }
             return contraction_normalized(
-                alpha, t0.p, t0.from, t0.size, t0.dim, t0.o, conj0, t0.v, Nd0, //
-                t1.p, t1.from, t1.size, t1.dim, t1.o, conj1, t1.v, Nd1,        //
-                beta, tr.p, tr.from, tr.size, tr.dim, tr.o, tr.v, Ndo, comm, co);
+                alpha, t0.p, t0.from, t0.size, t0.dim, t0.o, conj0, t0.v, Nd0c, //
+                t1.p, t1.from, t1.size, t1.dim, t1.o, conj1, t1.v, Nd1c,        //
+                beta, tr.p, tr.from, tr.size, tr.dim, tr.o, tr.v, Ndoc, comm, co);
         }
 
         /// Return a From_size from a partition that can be hashed and stored
