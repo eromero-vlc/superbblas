@@ -883,16 +883,33 @@ namespace superbblas {
 
             // Quick exit
             IndexType vol = volume(size);
-            if (volume(size) == 0) return IndicesT<IndexType, Cpu>();
+            if (Nd == 0 || volume(size) == 0) return IndicesT<IndexType, Cpu>();
+
+            // Check for common strides
+            Coor<Nd, IndexType> size_strides = get_strides<IndexType>(size, FastToSlow);
+            IndexType block = 1;
+            for (std::size_t j = 0; j < Nd; ++j) {
+                std::size_t i = Nd - 1ul - j;
+                if (size[i] > 1 &&
+                    (size_strides[i] != strides[i] || from[i] != 0 || size[i] != dim[i]))
+                    break;
+                block *= size[i];
+		vol = vol / size[i];
+            }
 
             // Compute the permutation
-            IndicesT<IndexType, Cpu> indices(vol, cpu);
-            Coor<Nd, IndexType> size_strides = get_strides<IndexType>(size, FastToSlow);
+            IndicesT<IndexType, Cpu> indices(vol * block, cpu);
 #ifdef _OPENMP
 #    pragma omp parallel for schedule(static)
 #endif
             for (IndexType i = 0; i < vol; ++i)
                 indices[i] = coor2index(index2coor(i, size, size_strides) + from, dim, strides);
+
+#ifdef _OPENMP
+#    pragma omp parallel for schedule(static)
+#endif
+            for (IndexType i = 1; i < block; ++i)
+                for (IndexType j = 0; j < vol; ++j) indices[i * vol + j] = indices[j] + i * vol;
 
             _t.flops = vol * Nd * 2 * multiplication_cost<IndexType>::value;
             _t.memops = vol * sizeof(IndexType);
