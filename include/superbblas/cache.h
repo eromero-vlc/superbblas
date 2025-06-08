@@ -253,9 +253,7 @@ namespace superbblas {
                 if (getMaxCacheGiBGpu() >= 0) {
                     return std::size_t(getMaxCacheGiBGpu() * 1024 * 1024 * 1024);
                 } else {
-                    std::size_t free = 0, total = 0;
-                    gpuCheck(SUPERBBLAS_GPU_SYMBOL(MemGetInfo)(&free, &total));
-                    return total / 10;
+                    return totalGpuMemory(0) / 10;
                 }
 #else
                 return (std::size_t)0;
