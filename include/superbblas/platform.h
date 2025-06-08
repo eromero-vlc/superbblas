@@ -351,9 +351,23 @@ namespace superbblas {
             sync(getStream(xpu));
         }
 
+        /// Return the total memory available in a device
+        /// \param xpu: context
+
+        inline std::size_t totalGpuMemory(int device) {
+            setDevice(device);
+            std::size_t free = 0, total = 0;
+            gpuCheck(SUPERBBLAS_GPU_SYMBOL(MemGetInfo)(&free, &total));
+            return total;
+        }
+
         /// NOTE: defined at `blas.h`
 
         inline void syncLegacyStream(const Gpu &xpu);
+#else
+
+        inline std::size_t totalGpuMemory(int) { return 0; }
+
 #endif // SUPERBBLAS_USE_GPU
 
         inline GpuStream createStream(const Cpu &) { return 0; }
