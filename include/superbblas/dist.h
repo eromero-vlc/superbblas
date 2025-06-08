@@ -3244,7 +3244,8 @@ namespace superbblas {
             const auto &pr_ = std::get<2>(p01);
             bool avoid_r_alloc =
                 (std::norm(beta) == 0 && fromr == Coor<Nd>{{}} && dimr == sizer && sug_or == o_r &&
-                 pr == pr_ && !does_proc_ranges_self_intersect(pr, dimr));
+                 pr == pr_ && !does_proc_ranges_self_intersect(pr, dimr) &&
+                 check_components_compatibility(vr, v0_));
 
             // Scale the output tensor by beta
             if (!avoid_r_alloc) {
