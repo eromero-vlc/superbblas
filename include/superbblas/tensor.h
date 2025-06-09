@@ -933,6 +933,19 @@ namespace superbblas {
             }
         };
 
+        /// Class that compute the origin permutation
+
+        template <typename IndexType>
+        struct perm_elem_rest : public thrust::unary_function<IndexType, IndexType> {
+            const IndexType vol;
+            IndexType *const p;
+            perm_elem_rest(IndexType vol, IndexType *p) : vol(vol), p(p) {}
+
+            __HOST__ __DEVICE__ IndexType operator()(IndexType i) {
+                return p[i % vol] + i / vol * vol;
+            }
+        };
+
         template <typename IndexType, std::size_t Nd>
         IndicesT<IndexType, Gpu>
         get_permutation_thrust(const Coor<Nd> &from, const Coor<Nd> &size, const Coor<Nd> &dim,
@@ -941,13 +954,33 @@ namespace superbblas {
             // Compute the permutation
             IndexType vol = volume(size);
             IndicesT<IndexType, Gpu> indices(vol, gpu);
+
+            // Quick exit
+            if (vol == 0) return indices;
+
+            // Check for common strides
             Coor<Nd, IndexType> size_strides = get_strides<IndexType>(size, FastToSlow);
+            IndexType block = 1;
+            for (std::size_t j = 0; j < Nd; ++j) {
+                std::size_t i = Nd - 1ul - j;
+                if (size[i] > 1 &&
+                    (size_strides[i] != strides[i] || from[i] != 0 || size[i] != dim[i]))
+                    break;
+                block *= size[i];
+		vol = vol / size[i];
+            }
 
             thrust::transform(thrust_par_on(gpu), thrust::make_counting_iterator(IndexType(0)),
                               thrust::make_counting_iterator(IndexType(vol)),
                               encapsulate_pointer(indices.data()),
                               perm_elem<IndexType, Nd>(toTCoor(from), toTCoor(size), toTCoor(dim),
                                                        toTCoor(size_strides), toTCoor(strides)));
+
+            thrust::transform(thrust_par_on(gpu), thrust::make_counting_iterator(IndexType(vol)),
+                              thrust::make_counting_iterator(IndexType(vol * block)),
+                              encapsulate_pointer(indices.data() + vol),
+                              perm_elem_rest<IndexType>(vol, indices.data()));
+
             return indices;
         }
 #endif
