@@ -1495,7 +1495,7 @@ namespace superbblas {
             auto sC1 = std::search(o1.begin(), o1.end(), oC.begin(), oC.begin() + nC);
             if (sT1 == o1.end() || sA1 == o1.end() || sC1 == o1.end() ||
                 (!conj1 && nT > 0 && nA > 0 && nC > 0 && sA1 < sT1 && sC1 < sT1) ||
-                (conj1 && nC > 0 && ((nT > 0 && sC1 < sT1) || (nC > 0 && sC1 < sA1))) ||
+                (conj1 && nC > 0 && ((nT > 0 && sC1 < sT1) || (nA > 0 && sC1 < sA1))) ||
                 (volB >= 1024 * 1024 && volA < 64 && volC < 64 && !swap_operands && sA1 < sC1)) {
                 std::copy_n(oT.begin(), nT, sug_o1.begin());
                 std::copy_n(oC.begin(), nC, sug_o1.begin() + nT + (!conj1 ? 0 : nA));
