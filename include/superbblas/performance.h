@@ -397,6 +397,10 @@ namespace superbblas {
     template <typename OStream> void reportTimings(OStream &s) {
         if (!getTrackingTime()) return;
 
+        // Save stream state
+        std::ios old_state(nullptr);
+        old_state.copyfmt(s);
+
         // Print the timings alphabetically
         s << "Timing of superbblas kernels:" << std::endl;
         s << "-----------------------------" << std::endl;
@@ -460,7 +464,9 @@ namespace superbblas {
               << " intensity: " << std::fixed << std::setprecision(1) << intensity               //
               << " )" << std::endl;
         }
-        s << std::defaultfloat;
+
+	// Restore stream state
+        s.copyfmt(old_state);
     }
 
     /// Report all tracked cache memory usage
