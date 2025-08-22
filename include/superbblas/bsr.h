@@ -76,8 +76,8 @@ namespace superbblas {
 
         /// Component of a BSR tensor
         template <std::size_t Nd, std::size_t Ni, typename T, typename XPU> struct BSRComponent {
-            Indices<XPU> i;          ///< number of nonzero blocks on each block image
-            vector<Coor<Nd>, XPU> j; ///< domain coordinates of the nonzero blocks
+            Indices<Cpu> i;          ///< number of nonzero blocks on each block image
+            vector<Coor<Nd>, Cpu> j; ///< domain coordinates of the nonzero blocks
             vector<T, XPU> it;       ///< nonzero values
             Coor<Nd> dimd;           ///< dimensions of the domain space
             Coor<Ni> dimi;           ///< dimensions of the image space
@@ -840,7 +840,7 @@ namespace superbblas {
 #    ifdef SUPERBBLAS_USE_CUDA
                 IndexType block_size = volume(v.blocki);
                 cudaDeviceProp prop;
-                gpuCheck(cudaGetDeviceProperties(&prop, deviceId(v.i.ctx())));
+                gpuCheck(cudaGetDeviceProperties(&prop, deviceId(v.it.ctx())));
                 /// TODO: ELL format is disable, it isn't correct currently
                 if (false && bsr.num_nnz_per_row >= 0 && !is_complex<T>::value &&
                     ((std::is_same<T, float>::value && prop.major >= 8) ||
@@ -1435,14 +1435,27 @@ namespace superbblas {
 
             for (unsigned int i = 0; i < ncomponents; ++i) {
                 std::size_t nii = volume(fsi[i][1]) / volume(blocki) / volume(kroni);
-                std::size_t njj =
-                    ctx_ii[i].plat == CPU ? sum(to_vector(ii[i], nii, ctx_ii[i].toCpu(session))) :
+                vector<IndexType, Cpu> vii;
+                if (ctx_ii[i].plat == CPU) {
+                    vii = to_vector(ii[i], nii, ctx_ii[i].toCpu(session));
+                } else {
 #ifdef SUPERBBLAS_USE_GPU
-                                          sum(to_vector(ii[i], nii, ctx_ii[i].toGpu(session)))
+                    vii = makeSure(to_vector(ii[i], nii, ctx_ii[i].toGpu(session)), Cpu{session});
 #else
-                                          0
+                    throw std::runtime_error("superbblas was not compiled with GPU support");
 #endif
-                    ;
+                }
+                const std::size_t njj = sum(vii);
+                vector<Coor<Nd>, Cpu> vjj;
+                if (ctx_jj[i].plat == CPU) {
+                    vjj = to_vector(jj[i], njj, ctx_jj[i].toCpu(session));
+                } else {
+#ifdef SUPERBBLAS_USE_GPU
+                    vjj = makeSure(to_vector(jj[i], njj, ctx_jj[i].toGpu(session)), Cpu{session});
+#else
+                    throw std::runtime_error("superbblas was not compiled with GPU support");
+#endif
+                }
                 std::size_t nvalues = njj * volume(blockd) * volume(blocki);
                 T *kronvi = kronv ? kronv[i] : (T *)nullptr;
                 std::size_t num_neighbors = (nii > 0 ? njj / nii : 0);
@@ -1452,33 +1465,27 @@ namespace superbblas {
 #ifdef SUPERBBLAS_USE_GPU
                 case CPU:
                     r.c.second.push_back(BSR<Nd, Ni, T, Cpu>{BSRComponent<Nd, Ni, T, Cpu>{
-                        to_vector(ii[i], nii, ctx_ii[i].toCpu(session)),
-                        to_vector(jj[i], njj, ctx_jj[i].toCpu(session)),
-                        to_vector(v[i], nvalues, ctx_v[i].toCpu(session)), fsd[i][1], fsi[i][1],
-                        blockd, blocki, krond, kroni,
-                        to_vector(kronvi, nkronvalues, ctx_kronv[i].toCpu(session)), blockImFast, co,
-                        i}});
+                        vii, vjj, to_vector(v[i], nvalues, ctx_v[i].toCpu(session)), fsd[i][1],
+                        fsi[i][1], blockd, blocki, krond, kroni,
+                        to_vector(kronvi, nkronvalues, ctx_kronv[i].toCpu(session)), blockImFast,
+                        co, i}});
                     assert(!v[i] || getPtrDevice(v[i]) == CPU_DEVICE_ID);
                     break;
                 case GPU:
                     r.c.first.push_back(BSR<Nd, Ni, T, Gpu>{BSRComponent<Nd, Ni, T, Gpu>{
-                        to_vector(ii[i], nii, ctx_ii[i].toGpu(session)),
-                        to_vector(jj[i], njj, ctx_jj[i].toGpu(session)),
-                        to_vector(v[i], nvalues, ctx_v[i].toGpu(session)), fsd[i][1], fsi[i][1],
-                        blockd, blocki, krond, kroni,
-                        to_vector(kronvi, nkronvalues, ctx_kronv[i].toGpu(session)), blockImFast, co,
-                        i}});
+                        vii, vjj, to_vector(v[i], nvalues, ctx_v[i].toGpu(session)), fsd[i][1],
+                        fsi[i][1], blockd, blocki, krond, kroni,
+                        to_vector(kronvi, nkronvalues, ctx_kronv[i].toGpu(session)), blockImFast,
+                        co, i}});
                     assert(!v[i] || getPtrDevice(v[i]) == ctx_v[i].device);
                     break;
 #else // SUPERBBLAS_USE_GPU
                 case CPU:
                     r.c.first.push_back(BSR<Nd, Ni, T, Cpu>{BSRComponent<Nd, Ni, T, Cpu>{
-                        to_vector(ii[i], nii, ctx_ii[i].toCpu(session)),
-                        to_vector(jj[i], njj, ctx_jj[i].toCpu(session)),
-                        to_vector(v[i], nvalues, ctx_v[i].toCpu(session)), fsd[i][1], fsi[i][1],
-                        blockd, blocki, krond, kroni,
-                        to_vector(kronvi, nkronvalues, ctx_kronv[i].toCpu(session)), blockImFast, co,
-                        i}});
+                        vii, vjj, to_vector(v[i], nvalues, ctx_v[i].toCpu(session)), fsd[i][1],
+                        fsi[i][1], blockd, blocki, krond, kroni,
+                        to_vector(kronvi, nkronvalues, ctx_kronv[i].toCpu(session)), blockImFast,
+                        co, i}});
                     assert(!v[i] || getPtrDevice(v[i]) == CPU_DEVICE_ID);
                     break;
 #endif
@@ -1624,7 +1631,7 @@ namespace superbblas {
                     "bsr: unsupported nonzero pattern specification, some domain coordinates have "
                     "-1 but not all block rows have the same number of nonzero blocks");
 
-            return {makeSure(ii, v.i.ctx()), makeSure(jj, v.j.ctx()),
+            return {makeSure(ii, v.it.ctx()), makeSure(jj, v.it.ctx()),
                     there_are_minus_ones_in_columns, num_nnz_per_row, ii[vi.size()]};
         }
 
@@ -1634,7 +1641,7 @@ namespace superbblas {
         get_bsr_indices(const BSRComponent<Nd, Ni, T, XPU> &v,
                         ReturnJJ return_jj_blocked = ReturnJJNoBlocking) {
             (void)return_jj_blocked;
-            return {Indices<XPU>(0, v.i.ctx()), Indices<XPU>(0, v.j.ctx()), false, -1, 0};
+            return {Indices<XPU>(0, v.it.ctx()), Indices<XPU>(0, v.it.ctx()), false, -1, 0};
         }
 
         /// Return the indices for a given tensor Kronecker BSR and whether the nonzero
@@ -1696,7 +1703,7 @@ namespace superbblas {
                 throw std::runtime_error("get_kron_indices: unsupported nonzero pattern "
                                          "specification, some domain coordinates have -1");
 
-            return {makeSure(ii, v.i.ctx()), makeSure(jj, v.j.ctx()),
+            return {makeSure(ii, v.it.ctx()), makeSure(jj, v.it.ctx()),
                     there_are_minus_ones_in_columns, num_nnz_per_row, ii[vi.size()]};
         }
 
@@ -1705,7 +1712,7 @@ namespace superbblas {
         std::pair<CsrIndices<XPU>, int> get_kron_indices(const BSRComponent<Nd, Ni, T, XPU> &v,
                                                          bool return_jj_blocked = false) {
             (void)return_jj_blocked;
-            return {Indices<XPU>(0, v.i.ctx()), Indices<XPU>(0, v.j.ctx()), false, -1, 0};
+            return {Indices<XPU>(0, v.it.ctx()), Indices<XPU>(0, v.it.ctx()), false, -1, 0};
         }
 
         /// Return splitting of dimension labels for the RSB operator - tensor multiplication
