@@ -667,25 +667,17 @@ namespace superbblas {
                                    (const T **)&b, ldb, beta, &c, ldc, 1, xpu);
                 }
             } else {
-                auto xpu_host = xpu.toCpuPinned();
-                vector<T *, Gpu> a_cpu(batch_size, xpu_host, doCacheAlloc);
-                vector<T *, Gpu> b_cpu(batch_size, xpu_host, doCacheAlloc);
-                vector<T *, Gpu> c_cpu(batch_size, xpu_host, doCacheAlloc);
-                auto a_cpu_ptr = a_cpu.data();
-                auto b_cpu_ptr = b_cpu.data();
-                auto c_cpu_ptr = c_cpu.data();
-                launchHostKernel(
-                    [=] {
-                        for (int i = 0; i < batch_size; ++i)
-                            abc(i, &a_cpu_ptr[i], &b_cpu_ptr[i], &c_cpu_ptr[i]);
-                    },
-                    xpu_host);
-                auto a_xpu = makeSure(a_cpu, xpu, doCacheAlloc);
-                auto b_xpu = makeSure(b_cpu, xpu, doCacheAlloc);
-                auto c_xpu = makeSure(c_cpu, xpu, doCacheAlloc);
+                vector<T *, Cpu> a_cpu(batch_size, Cpu{}, doCacheAlloc);
+                vector<T *, Cpu> b_cpu(batch_size, Cpu{}, doCacheAlloc);
+                vector<T *, Cpu> c_cpu(batch_size, Cpu{}, doCacheAlloc);
+                for (int i = 0; i < batch_size; ++i) abc(i, &a_cpu[i], &b_cpu[i], &c_cpu[i]);
+                auto a_xpu = makeSure(a_cpu, xpu, doCacheAlloc, true);
+                auto b_xpu = makeSure(b_cpu, xpu, doCacheAlloc, true);
+                auto c_xpu = makeSure(c_cpu, xpu, doCacheAlloc, true);
                 xgemm_batch<T>(transa, transb, m, n, k, alpha, (const T **)a_xpu.data(), lda,
                                (const T **)b_xpu.data(), ldb, beta, c_xpu.data(), ldc, batch_size,
                                xpu);
+                sync(xpu);
             }
         }
 
@@ -848,7 +840,7 @@ namespace superbblas {
 
         template <typename T, typename XPU>
         vector<T, XPU> makeSure(const vector<T, XPU> &v, XPU xpu,
-                                CacheAlloc cacheAlloc = dontCacheAlloc) {
+                                CacheAlloc cacheAlloc = dontCacheAlloc, bool = false) {
             if (deviceId(v.ctx()) == deviceId(xpu)) {
                 causalConnectTo(v.ctx(), xpu);
                 return v;
@@ -867,7 +859,33 @@ namespace superbblas {
         template <typename T, typename XPU1, typename XPU0,
                   typename std::enable_if<!std::is_same<XPU0, XPU1>::value, bool>::type = true>
         vector<T, XPU1> makeSure(const vector<T, XPU0> &v, XPU1 xpu1,
-                                 CacheAlloc cacheAlloc = dontCacheAlloc) {
+                                 CacheAlloc cacheAlloc = dontCacheAlloc, bool doAsync = false) {
+            if (std::is_same<XPU0, Cpu>::value && doAsync) {
+                // Shortcut for async copying from cpu to gpu
+                const auto &host = xpu1.toCpuPinned();
+                vector<T, XPU1> v_host(v.size(), host, cacheAlloc);
+                const T *vp = v.data();
+                T *v_hostp = v_host.data();
+                const auto n = v.size();
+                bool *flag_done = new bool(false);
+                launchHostKernel([=] { std::memcpy(v_hostp, vp, n * sizeof(T)); }, host);
+                vector<T, XPU1> r_dummy(v.size(), xpu1, cacheAlloc);
+                const auto alloc = r_dummy.ptr;
+                const auto v_copy = v;
+                auto new_alloc =
+                    std::shared_ptr<char>(alloc.get(), [alloc, v_copy, v_host, xpu1, flag_done](char *) {
+                        static_assert(!std::is_reference<decltype(alloc)>::value, "wtf");
+                        static_assert(!std::is_reference<decltype(v_copy)>::value, "wtf");
+                        static_assert(!std::is_reference<decltype(v_host)>::value, "wtf");
+                        static_assert(!std::is_reference<decltype(xpu1)>::value, "wtf");
+                        if (!*flag_done) sync(xpu1);
+                        delete flag_done;
+                    });
+                vector<T, XPU1> r(r_dummy.n, r_dummy.ptr_aligned, new_alloc, xpu1);
+                copy_n(v_host.data(), v_host.ctx(), v_host.size(), r.data(), r.ctx());
+                launchHostKernel([=] { *flag_done = true; }, host);
+                return r;
+            }
             vector<T, XPU1> r(v.size(), xpu1, cacheAlloc);
             copy_n(v.data(), v.ctx(), v.size(), r.data(), r.ctx());
             return r;
@@ -1015,10 +1033,10 @@ namespace superbblas {
         DECL_CONJ_T(void conj(vector<T, Gpu> &v))
         IMPL({
             if (deviceId(v.ctx()) == CPU_DEVICE_ID) {
+                auto *p = v.data();
+                std::size_t n = v.size();
                 launchHostKernel(
                     [=] {
-                        auto *p = v.data();
-                        std::size_t n = v.size();
                         for (std::size_t i = 0; i < n; ++i) p[i] = std::conj(p[i]);
                     },
                     v.ctx());

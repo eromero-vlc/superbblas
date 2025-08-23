@@ -1631,8 +1631,9 @@ namespace superbblas {
                     "bsr: unsupported nonzero pattern specification, some domain coordinates have "
                     "-1 but not all block rows have the same number of nonzero blocks");
 
-            return {makeSure(ii, v.it.ctx()), makeSure(jj, v.it.ctx()),
-                    there_are_minus_ones_in_columns, num_nnz_per_row, ii[vi.size()]};
+            return {makeSure(ii, v.it.ctx(), doCacheAlloc, true),
+                    makeSure(jj, v.it.ctx(), doCacheAlloc, true), there_are_minus_ones_in_columns,
+                    num_nnz_per_row, ii[vi.size()]};
         }
 
         template <std::size_t Nd, std::size_t Ni, typename T, typename XPU,
