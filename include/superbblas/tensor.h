@@ -1075,8 +1075,8 @@ namespace superbblas {
             // Do the copy
             if (blocking == 1) {
                 if (mask0.size() > 0) {
-                    indices0 = select(indices0, mask0.data() + disp0, indices0);
-                    indices1 = select(indices1, mask1.data() + disp1, indices1);
+                    indices0 = select(indices0, mask0, disp0, indices0);
+                    indices1 = select(indices1, mask1, disp1, indices1);
                     if (indices0.size() != indices1.size())
                         throw std::runtime_error("copy: non-compatible masks");
                 }
