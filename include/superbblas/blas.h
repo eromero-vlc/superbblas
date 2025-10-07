@@ -116,6 +116,16 @@ namespace superbblas {
 
     namespace detail {
 
+        /// the_real<T>::type returns the real type for std::complex and T for the rest
+
+        template <typename T> struct the_real {
+            using type = T;
+        };
+
+        template <typename T> struct the_real<std::complex<T>> {
+            using type = T;
+        };
+
 #ifdef SUPERBBLAS_USE_GPU
         /// Wait until everything finishes in the given stream
         /// \param xpu: context

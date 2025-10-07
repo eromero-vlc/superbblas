@@ -14,6 +14,15 @@
 #endif
 
 #if defined(SUPERBBLAS_USE_HIP) && defined(SUPERBBLAS_GENERATE_KERNELS)
+#    if __CUDA_ARCH__ >= 800
+#        define SUPERBBLAS_CUDA_SUPPORTS_TENSOR_CORES_FOR_DOUBLES
+#    endif
+#    if __CUDA_ARCH__ >= 700
+#        define SUPERBBLAS_CUDA_SUPPORTS_TENSOR_CORES
+#    endif
+#endif
+
+#if defined(SUPERBBLAS_USE_HIP) && defined(SUPERBBLAS_GENERATE_KERNELS)
 
 #    include <hip/hip_ext.h>
 
@@ -91,6 +100,8 @@ namespace superbblas {
             return dir + num_dirs * block_row;
         }
 
+	/// Default implementation for unsupported types
+
         template <typename T> struct bsr_kron_3x3_4x4perm_kernel {
             static constexpr bool type_available() { return false; }
 
@@ -120,6 +131,8 @@ namespace superbblas {
                 (void)ncols;
             }
         };
+
+        /// Implementation for complex double
 
         template <> struct bsr_kron_3x3_4x4perm_kernel<std::complex<double>> {
             static constexpr bool type_available() { return true; }
@@ -210,6 +223,8 @@ namespace superbblas {
 #    endif // defined(SUPERBBLAS_ROCM_SUPPORTS_TENSOR_CORES_FOR_DOUBLES)
             }
         };
+
+        /// Implementation for complex single
 
         template <> struct bsr_kron_3x3_4x4perm_kernel<std::complex<float>> {
             static constexpr bool type_available() { return true; }
@@ -306,6 +321,34 @@ namespace superbblas {
             }
         };
 
+        /// Computes the BSR-kron matrix vector multiplication
+        /// \param a: a[r*a_ldr+c*a_ldc+j*9] is the nonzero value at row r+3*I and column c+jj[j]
+        /// \param a_ldr: jump to the element at the next row in a nonzero block
+        /// \param a_ldc: jump to the element at the next column in a nonzero block
+        /// \param jj: column indices for each nonzero block
+        /// \param num_dirs: number of nonzero blocks per row
+        /// \param perm_scalars: 4*num_dirs with the nonzero values of the CSR kron matrices
+        /// \param perm: 4*num_dirs with the column indices of the CSR kron matrices
+        /// \param x: right-hand-side nonzeros with ordering 4,column,3,row
+        /// \param ldx: leading dimension of x
+        /// \param y: output nonzeros with ordering 4,column,3,row
+        /// \param ldy: leading dimension of y
+        /// \param ncols: number of columns on x and y
+        /// \param xpu: gpu context
+        ///
+        /// NOTE:
+        /// The routine does:
+        ///   y(0:3,0:2,I,n) = \sum_{j=0:dirs-1} [ a(0:2,I,0:2,J(I,j)) \Kron_Prod
+        ///                                          k(0:4,0:4,j)  ] * x(0:3,0:2,J(I,j),n),
+        /// where
+        /// - J(I,j) is the block column index for block row I and direction j;
+        /// - a is sparse matrix with 3x3 non-overlapping dense blocks with `dirs` nonzero block
+        ///   per row;
+        /// - k is a permutation 4x4 matrix with each row scaled independently;
+        /// - x,y are the input/output tensors with several fields indexed by `n`.
+        ///
+        /// The input and output tensors are ordered as a kind of row-major: (0:3,n,0:2,I).
+
         template <typename T>
         DECL_BSR_KRON_3x3_4x4PERM_T(void bsr_kron_3x3_4x4perm(const T *a, int a_ldr, int a_ldc,
                                                               int *jj, int block_rows, int num_dirs,
@@ -329,6 +372,8 @@ namespace superbblas {
                 gpuCheck(hipGetLastError());
             })
 
+        /// Return whether the gpu supports the specialized BSR-Kron kernel
+
         template <typename T>
         DECL_AVAILABLE_BSR_KRON_3x3_4x4PERM_T(bool available_bsr_kron_3x3_4x4perm(const Gpu &xpu))
             IMPL({
@@ -344,6 +389,348 @@ namespace superbblas {
                 return flag_host != 0;
             })
 #endif // SUPERBBLAS_USE_HIP
+#ifdef SUPERBBLAS_USE_CUDA
+
+	/// Default implementation for unsupported types
+
+        template <typename T> struct bsr_kron_3x3_4x4perm_kernel {
+            static constexpr bool type_available() { return false; }
+
+            using ptr = typename the_real<T>::type *;
+
+            static dim3 block_size() { return dim3(0, 0, 0); }
+
+            static dim3 grid_size(int, int) { return dim3(0, 0, 0); }
+        };
+
+        template <typename T> __global__ void bsr_kron_3x3_4x4perm_kernel_available(int *flag) {
+            *flag = 0;
+        }
+
+        template <typename T>
+        __global__ void bsr_kron_3x3_4x4perm_kernel_fun(
+            const typename the_real<T>::type *a, int a_ldr, int a_ldc, int *jj, int block_rows,
+            int num_dirs, const typename the_real<T>::type *perm_scalars, const int *perm,
+            const typename the_real<T>::type *x, int ldx, typename the_real<T>::type *y, int ldy,
+            int ncols) {
+            (void)a;
+            (void)a_ldr;
+            (void)a_ldc;
+            (void)jj;
+            (void)block_rows;
+            (void)num_dirs;
+            (void)perm_scalars;
+            (void)perm;
+            (void)x;
+            (void)ldx;
+            (void)y;
+            (void)ldy;
+            (void)ncols;
+        }
+
+        /// Implementation for complex double
+
+        template <> struct bsr_kron_3x3_4x4perm_kernel<std::complex<double>> {
+            static constexpr bool type_available() { return true; }
+
+            using ptr = double *;
+
+            static dim3 block_size() { return dim3(32, 1, 1); }
+
+            static dim3 grid_size(int block_rows, int num_cols) {
+                return dim3((num_cols + 3) / 4, block_rows, 1);
+            }
+        };
+
+        template <>
+        __global__ void bsr_kron_3x3_4x4perm_kernel_available<std::complex<double>>(int *flag) {
+#    if defined(SUPERBBLAS_CUDA_SUPPORTS_TENSOR_CORES_FOR_DOUBLES)
+            *flag = 1;
+#    else
+            *flag = 0;
+#    endif
+        }
+
+        template <>
+        __global__ void bsr_kron_3x3_4x4perm_kernel_fun<std::complex<double>>(
+            const double *a, int a_ldr, int a_ldc, int *jj, int block_rows, int num_dirs,
+            const double *perm_scalars, const int *perm, const double *x, int ldx, double *y,
+            int ldy, int ncols) {
+#    if defined(SUPERBBLAS_CUDA_SUPPORTS_TENSOR_CORES_FOR_DOUBLES)
+            (void)block_rows;
+            double c[2] = {0, 0}; ///< accumulator
+            double d[2] = {0, 0}; ///< result
+            auto col = blockIdx.x * 4 + (threadIdx.x / 4) % 4;
+            auto blk_row = blockIdx.y;
+            auto a_row = (threadIdx.x / 4) % 4;
+            auto a_col = threadIdx.x % 4;
+            auto x_color = threadIdx.x % 4;
+            auto x_spin = (threadIdx.x / 4) % 4;
+            auto y_color = (threadIdx.x / 4) % 4;
+            auto y_spin = (threadIdx.x % 2) * 2;
+            int a_re = (threadIdx.x / 16);    ///< 0:real, 1:imag
+            int x_re = (threadIdx.x % 8) / 4; ///< 0:real, 1:imag
+            int y_re0 = (threadIdx.x / 4) / 4;
+            int y_re1 = (threadIdx.x % 4) / 2;
+            for (int dir = 0; dir < num_dirs; ++dir) {
+                // read a
+                bool a_is_zero = (a_row == 3 || a_col == 3);
+                int a_idx = get_a_idx_complex(a_ldr, a_ldc, num_dirs, a_row, a_col, blk_row, dir);
+                double a_val = 0.0;
+                if (!a_is_zero) a_val = a[a_idx + a_re];
+
+                // read x
+                bool x_is_zero = (x_color == 3 || col >= ncols);
+                int x_idx = get_xy_idx_complex(ldx, ncols, x_color, perm[4 * dir + x_spin],
+                                               jj[get_jj_idx(num_dirs, blk_row, dir)], col);
+                double x_val = 0.0, x_val_i = 0.0;
+                int s_dir = (4 * dir + x_spin) * 2;
+                const double s_r = perm_scalars[s_dir], s_i = perm_scalars[s_dir + 1];
+                if (!x_is_zero) x_val_r = x[x_idx], x_val_i = x[x_idx + 1];
+                x_val_r = x_val_r * s_r - x_val_i * s_i;
+                x_val_i = x_val_r * s_i + x_val_i * s_r;
+                const double x_val = x_re == 0 ? x_val_r : x_val_i;
+
+                // Use MMA intrinsic for matrix multiplication D = A*B + C
+                c = d;
+                asm volatile("mma.sync.aligned.m8n8k4.row.col.f64.f64.f64.f64 "
+                             "{%0, %1}, "
+                             "{%2}, "
+                             "{%3}, "
+                             "{%4, %5};"
+                             : "=d"(d[0]), "=d"(d[1])
+                             : "d"(a_val), "d"(b_val), "d"(c[0]), "d"(c[1]));
+            }
+            bool y_is_zero = (y_color == 3 || col >= ncols);
+            int y_idx0 = get_xy_idx_complex(ldy, ncols, y_color, y_spin, blk_row, col);
+            int y_idx1 = get_xy_idx_complex(ldy, ncols, y_color, y_spin + 1, blk_row, col);
+            // real(y) = y_val[y_re0 == 0 && y_re1 == 0] - y_val[y_re0 == 1 && y_re1 == 1]
+            // imag(y) = y_val[y_re0 == 0 && y_re1 == 1] + y_val[y_re0 == 1 && y_re1 == 0]
+            // Then,
+            // - threads y_re0 == 0 && y_re1 == 0 pass d[1] and get d[0] from y_re0 == 1 && y_re1 == 1
+            // - threads y_re0 == 1 && y_re1 == 1 pass d[0] and get d[1] from y_re0 == 0 && y_re1 == 0
+            int source_thr = 0; // get from thread
+            int di = 0;         // either pass d[0] or d[1]
+            if (y_re0 == 0 && y_re1 == 0)
+                source_thr = (y_color + 4) * 4 + 2 + y_spin / 2, di = 1;
+            else if (y_re0 == 1 && y_re1 == 1)
+                source_thr = (y_color + 4) + y_spin / 2, di = 0;
+            else if (y_re0 == 0 && y_re1 == 1)
+                source_thr = (y_color + 4) * 4 + y_spin / 2, di = 1;
+            else /* if (y_re0 == 1 && y_re1 == 0) */
+                source_thr = (y_color + 4) + 2 + y_spin / 2, di = 0;
+            const double d_other = __long_long_as_double(
+                __shfl_sync(0xffffffff, __double_as_long_long(d[di]), source_thr));
+            if (!y_is_zero && y_re0 == 0 && y_re1 == 0) y[y_idx0] = d[0] + d_other;
+            if (!y_is_zero && y_re0 == 1 && y_re1 == 1) y[y_idx1] = d[1] + d_other;
+            if (!y_is_zero && y_re0 == 0 && y_re1 == 1) y[y_idx0 + 1] = d[0] + d_other;
+            if (!y_is_zero && y_re0 == 1 && y_re1 == 0) y[y_idx1 + 1] = d[0] + d_other;
+#    else
+            (void)a;
+            (void)a_ldr;
+            (void)a_ldc;
+            (void)jj;
+            (void)block_rows;
+            (void)num_dirs;
+            (void)perm_scalars;
+            (void)perm;
+            (void)x;
+            (void)ldx;
+            (void)y;
+            (void)ldy;
+            (void)ncols;
+#    endif // defined(SUPERBBLAS_ROCM_SUPPORTS_TENSOR_CORES_FOR_DOUBLES)
+        }
+
+        /// Implementation for complex single
+	/// NOTE: in progress
+
+#    if 0
+
+        template <> struct bsr_kron_3x3_4x4perm_kernel<std::complex<float>> {
+            static constexpr bool type_available() { return true; }
+
+            using ptr = double *;
+
+            static dim3 block_size() { return dim3(32, 1, 1); }
+
+            static dim3 grid_size(int block_rows, int num_cols) {
+                return dim3((num_cols + 3) / 4, block_rows, 1);
+            }
+        };
+
+        template <>
+        __global__ void bsr_kron_3x3_4x4perm_kernel_available<std::complex<float>>(int *flag) {
+#        if defined(SUPERBBLAS_CUDA_SUPPORTS_TENSOR_CORES)
+            *flag = 1;
+#        else
+            *flag = 0;
+#        endif
+        }
+
+        template <>
+        __global__ void bsr_kron_3x3_4x4perm_kernel_fun<std::complex<float>>(
+            const float *a, int a_ldr, int a_ldc, int *jj, int block_rows, int num_dirs,
+            const float *perm_scalars, const int *perm, const float *x, int ldx, float *y, int ldy,
+            int ncols) {
+#        if defined(SUPERBBLAS_CUDA_SUPPORTS_TENSOR_CORES)
+            (void)block_rows;
+            float c[2] = {0, 0, 0, 0}; ///< accumulator
+            float d[2] = {0, 0, 0, 0}; ///< result
+            auto col = blockIdx.x * 4 + (threadIdx.x / 4) % 4;
+            auto blk_row = blockIdx.y;
+            auto a_row = (threadIdx.x / 4) % 4;
+            auto a_col = threadIdx.x % 4;
+            auto x_color = threadIdx.x % 4;
+            auto x_spin = (threadIdx.x / 4) % 4;
+            auto y_color = (threadIdx.x / 4) % 4;
+            auto y_spin = (threadIdx.x % 2) * 2;
+            int a_re = (threadIdx.x / 16);    ///< 0:real, 1:imag
+            int x_re = (threadIdx.x % 8) / 4; ///< 0:real, 1:imag
+            int y_re0 = (threadIdx.x / 4) / 4;
+            int y_re1 = (threadIdx.x % 4) / 2;
+            for (int dir = 0; dir < num_dirs; ++dir) {
+                // read a
+                bool a_is_zero = (a_row == 3 || a_col == 3);
+                int a_idx = get_a_idx_complex(a_ldr, a_ldc, num_dirs, a_row, a_col, blk_row, dir);
+                double a_val = 0.0;
+                if (!a_is_zero) a_val = a[a_idx + a_re];
+
+                // read x
+                bool x_is_zero = (x_color == 3 || col >= ncols);
+                int x_idx = get_xy_idx_complex(ldx, ncols, x_color, perm[4 * dir + x_spin],
+                                               jj[get_jj_idx(num_dirs, blk_row, dir)], col);
+                double x_val = 0.0, x_val_i = 0.0;
+                int s_dir = (4 * dir + x_spin) * 2;
+                const double s_r = perm_scalars[s_dir], s_i = perm_scalars[s_dir + 1];
+                if (!x_is_zero) x_val_r = x[x_idx], x_val_i = x[x_idx + 1];
+                x_val_r = x_val_r * s_r - x_val_i * s_i;
+                x_val_i = x_val_r * s_i + x_val_i * s_r;
+                const double x_val = x_re == 0 ? x_val_r : x_val_i;
+
+                // Use MMA intrinsic for matrix multiplication D = A*B + C
+                c = d;
+                auto a_val_tf0 = __float_to_tf32(a_val0);
+                auto a_val_tf1 = __float_to_tf32(a_val1);
+                auto b_val_tf = __float_to_tf32(a_val);
+                asm volatile("mma.sync.aligned.m16n8k4.row.col.f32.tf32.tf32.f32 "
+                             "{%0, %1, %2, %3}, "
+                             "{%4, %5}, "
+                             "{%6}, "
+                             "{%7, %8, %9, %10};"
+                             : "=f"(d[0]), "=f"(d[1]), "=f"(d[2]), "=f"(d[3])
+                             : "r"(a_val_tf0), "r"(a_val_tf1), //
+                               "r"(b_val_tf),                  //
+                               "f"(c[0]), "f"(c[1]), "f"(c[2]), "f"(c[3]));
+            }
+            bool y_is_zero = (y_color == 3 || col >= ncols);
+            int y_idx0 = get_xy_idx_complex(ldy, ncols, y_color, y_spin, blk_row, col);
+            int y_idx1 = get_xy_idx_complex(ldy, ncols, y_color, y_spin + 1, blk_row, col);
+            // real(y) = y_val[y_re0 == 0 && y_re1 == 0] - y_val[y_re0 == 1 && y_re1 == 1]
+            // imag(y) = y_val[y_re0 == 0 && y_re1 == 1] + y_val[y_re0 == 1 && y_re1 == 0]
+            // Then,
+            // - threads y_re0 == 0 && y_re1 == 0 pass d[1] and get d[0] from y_re0 == 1 && y_re1 == 1
+            // - threads y_re0 == 1 && y_re1 == 1 pass d[0] and get d[1] from y_re0 == 0 && y_re1 == 0
+            int source_thr = 0; // get from thread
+            int di = 0;         // either pass d[0] or d[1]
+            if (y_re0 == 0 && y_re1 == 0)
+                source_thr = (y_color + 4) * 4 + 2 + y_spin / 2, di = 1;
+            else if (y_re0 == 1 && y_re1 == 1)
+                source_thr = (y_color + 4) + y_spin / 2, di = 0;
+            else if (y_re0 == 0 && y_re1 == 1)
+                source_thr = (y_color + 4) * 4 + y_spin / 2, di = 1;
+            else /* if (y_re0 == 1 && y_re1 == 0) */
+                source_thr = (y_color + 4) + 2 + y_spin / 2, di = 0;
+            const double d_other = __long_long_as_double(
+                __shfl_sync(0xffffffff, __double_as_long_long(d[di]), source_thr));
+            if (!y_is_zero && y_re0 == 0 && y_re1 == 0) y[y_idx0] = d[0] + d_other;
+            if (!y_is_zero && y_re0 == 1 && y_re1 == 1) y[y_idx1] = d[1] + d_other;
+            if (!y_is_zero && y_re0 == 0 && y_re1 == 1) y[y_idx0 + 1] = d[0] + d_other;
+            if (!y_is_zero && y_re0 == 1 && y_re1 == 0) y[y_idx1 + 1] = d[0] + d_other;
+#        else
+            (void)a;
+            (void)a_ldr;
+            (void)a_ldc;
+            (void)jj;
+            (void)block_rows;
+            (void)num_dirs;
+            (void)perm_scalars;
+            (void)perm;
+            (void)x;
+            (void)ldx;
+            (void)y;
+            (void)ldy;
+            (void)ncols;
+#        endif // defined(SUPERBBLAS_ROCM_SUPPORTS_TENSOR_CORES_FOR_DOUBLES)
+        }
+#    endif
+
+        /// Computes the BSR-kron matrix vector multiplication
+        /// \param a: a[r*a_ldr+c*a_ldc+j*9] is the nonzero value at row r+3*I and column c+jj[j]
+        /// \param a_ldr: jump to the element at the next row in a nonzero block
+        /// \param a_ldc: jump to the element at the next column in a nonzero block
+        /// \param jj: column indices for each nonzero block
+        /// \param num_dirs: number of nonzero blocks per row
+        /// \param perm_scalars: 4*num_dirs with the nonzero values of the CSR kron matrices
+        /// \param perm: 4*num_dirs with the column indices of the CSR kron matrices
+        /// \param x: right-hand-side nonzeros with ordering 4,column,3,row
+        /// \param ldx: leading dimension of x
+        /// \param y: output nonzeros with ordering 4,column,3,row
+        /// \param ldy: leading dimension of y
+        /// \param ncols: number of columns on x and y
+        /// \param xpu: gpu context
+        ///
+        /// NOTE:
+        /// The routine does:
+        ///   y(0:3,0:2,I,n) = \sum_{j=0:dirs-1} [ a(0:2,I,0:2,J(I,j)) \Kron_Prod
+        ///                                          k(0:4,0:4,j)  ] * x(0:3,0:2,J(I,j),n),
+        /// where
+        /// - J(I,j) is the block column index for block row I and direction j;
+        /// - a is sparse matrix with 3x3 non-overlapping dense blocks with `dirs` nonzero block
+        ///   per row;
+        /// - k is a permutation 4x4 matrix with each row scaled independently;
+        /// - x,y are the input/output tensors with several fields indexed by `n`.
+        ///
+        /// The input and output tensors are ordered as a kind of row-major: (0:3,n,0:2,I).
+
+        template <typename T>
+        DECL_BSR_KRON_3x3_4x4PERM_T(void bsr_kron_3x3_4x4perm(const T *a, int a_ldr, int a_ldc,
+                                                              int *jj, int block_rows, int num_dirs,
+                                                              const T *perm_scalars,
+                                                              const int *perm, const T *x, int ldx,
+                                                              T *y, int ldy, int ncols, Gpu xpu))
+            IMPL({
+                if (!bsr_kron_3x3_4x4perm_kernel<T>::type_available())
+                    throw std::runtime_error("wtf!");
+                using ptr = typename bsr_kron_3x3_4x4perm_kernel<T>::ptr;
+                const auto grid = bsr_kron_3x3_4x4perm_kernel<T>::grid_size(block_rows, ncols);
+                const auto blk = bsr_kron_3x3_4x4perm_kernel<T>::block_size();
+                bsr_kron_3x3_4x4perm_kernel_fun<T><<<grid, blk, 0, getStream(xpu)>>>(
+                    (const ptr)a, a_ldr, a_ldc, jj, 1, num_dirs, (const ptr)perm_scalars, perm,
+                    (const ptr)x, ldx, (ptr)y, ldy, ncols);
+                gpuCheck(cudaGetLastError());
+            })
+
+        /// Return whether the gpu supports the specialized BSR-Kron kernel
+
+        template <typename T>
+        DECL_AVAILABLE_BSR_KRON_3x3_4x4PERM_T(bool available_bsr_kron_3x3_4x4perm(const Gpu &xpu))
+            IMPL({
+                if (!bsr_kron_3x3_4x4perm_kernel<T>::type_available()) return false;
+                setDevice(xpu);
+                int *flag;
+                gpuCheck(cudaMalloc(&flag, sizeof(int)));
+                bsr_kron_3x3_4x4perm_kernel_available<T><<<1, 1>>>(flag);
+                gpuCheck(cudaDeviceSynchronize());
+                gpuCheck(cudaGetLastError());
+                int flag_host = 0;
+                gpuCheck(cudaMemcpy(&flag_host, flag, sizeof(int), cudaMemcpyDeviceToHost));
+                gpuCheck(cudaFree(flag));
+                return flag_host != 0;
+            })
+
+#endif // SUPERBBLAS_USE_CUDA
+
     }
 }
 #endif // __SUPERBBLAS_TENFUCKS_GPU__

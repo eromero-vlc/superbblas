@@ -715,6 +715,8 @@ namespace superbblas {
             vector<IndexType, Gpu> ii, jj;  ///< BSR row and column nonzero indices
             bool
                 kron_use_crafted_kernel; ///< whether to use a crafted kernel instead of cu/hipsparse
+            vector<int, Gpu> kron_perm;  ///< represent the kron matrices with a permutation
+            vector<T, Gpu> kron_scalars; ///< represent the kron matrices with scalars
 #    ifdef SUPERBBLAS_USE_CUDA
             std::shared_ptr<cusparseMatDescr_t>
                 descrA_bsr; ///< cuSparse descriptor for BSR matrices
@@ -723,8 +725,6 @@ namespace superbblas {
             enum SparseFormat{FORMAT_BSR, FORMAT_CSR, FORMAT_ELL} spFormat; ///< the sparse format
 #    else
             std::shared_ptr<hipsparseMatDescr_t> descrA_bsr; ///< hipSparse descriptor
-            vector<int, Gpu> kron_perm;  ///< represent the kron matrices with a permutation
-            vector<T, Gpu> kron_scalars; ///< represent the kron matrices with scalars
 #    endif
             unsigned int num_nnz_per_row;   ///< Number of nnz per row (for Kronecker BSR)
             vector<T, Cpu> kron_cpu;        ///< Host version of v.kron
@@ -749,7 +749,7 @@ namespace superbblas {
                 bool is_kron = v.kron_it.size() > 0;
 
                 // Check whether to use the crafted kernels
-#    ifdef SUPERBBLAS_USE_HIP
+#    ifdef SUPERBBLAS_USE_GPU
                 if (is_kron) {
                     kron_use_crafted_kernel = true;
                     std::size_t ki = volume(v.kroni);
@@ -838,61 +838,70 @@ namespace superbblas {
                 num_nnz_per_row = bsr.num_nnz_per_row;
 
 #    ifdef SUPERBBLAS_USE_CUDA
-                IndexType block_size = volume(v.blocki);
-                cudaDeviceProp prop;
-                gpuCheck(cudaGetDeviceProperties(&prop, deviceId(v.it.ctx())));
-                /// TODO: ELL format is disable, it isn't correct currently
-                if (false && bsr.num_nnz_per_row >= 0 && !is_complex<T>::value &&
-                    ((std::is_same<T, float>::value && prop.major >= 8) ||
-                     (std::is_same<T, double>::value && prop.major >= 8))) {
-                    spFormat = FORMAT_ELL;
-                } else if (!bsr.j_has_negative_indices) {
-                    spFormat = block_size == 1 ? FORMAT_CSR : FORMAT_BSR;
-                } else {
-                    throw std::runtime_error("bsr: unsupported -1 column indices when using "
-                                             "cuSPARSE and not using ELL");
-                }
-
-                if (spFormat == FORMAT_BSR) {
-                    implementation_ = "cusparse_bsr";
-                    allowLayout = ColumnMajorForY;
-                    preferredLayout = !is_kron ? RowMajor : ColumnMajor;
-                    descrA_bsr = std::shared_ptr<cusparseMatDescr_t>(
-                        new cusparseMatDescr_t, [](cusparseMatDescr_t *p) {
-                            cusparseDestroyMatDescr(*p);
-                            delete p;
-                        });
-                    gpuSparseCheck(cusparseCreateMatDescr(&*descrA_bsr));
-                    gpuSparseCheck(cusparseSetMatIndexBase(*descrA_bsr, CUSPARSE_INDEX_BASE_ZERO));
-                    gpuSparseCheck(cusparseSetMatType(*descrA_bsr, CUSPARSE_MATRIX_TYPE_GENERAL));
-                } else {
-                    static_assert(sizeof(IndexType) == 4, "unsupported integer other than 32 bits");
-                    IndexType num_cols = volume(v.dimd);
-                    IndexType num_rows = volume(v.dimi);
-                    IndexType ki = volume(v.kroni);
-                    IndexType kd = volume(v.krond);
-                    descrA_other = std::shared_ptr<cusparseSpMatDescr_t>(
-                        new cusparseSpMatDescr_t, [](cusparseSpMatDescr_t *p) {
-                            cusparseDestroySpMat(*p);
-                            delete p;
-                        });
-                    allowLayout = SameLayoutForXAndY;
-                    preferredLayout = RowMajor;
-                    if (spFormat == FORMAT_CSR) {
-                        implementation_ = "cusparse_csr";
-                        gpuSparseCheck(cusparseCreateCsr(
-                            &*descrA_other, num_rows / ki,
-                            num_cols / kd * (is_kron ? kron_disp_rev.size() : 1), bsr.nnz,
-                            ii.data(), jj.data(), v.it.data(), CUSPARSE_INDEX_32I,
-                            CUSPARSE_INDEX_32I, CUSPARSE_INDEX_BASE_ZERO, toCudaDataType<T>()));
+                if (!kron_use_crafted_kernel) {
+                    IndexType block_size = volume(v.blocki);
+                    cudaDeviceProp prop;
+                    gpuCheck(cudaGetDeviceProperties(&prop, deviceId(v.it.ctx())));
+                    /// TODO: ELL format is disable, it isn't correct currently
+                    if (false && bsr.num_nnz_per_row >= 0 && !is_complex<T>::value &&
+                        ((std::is_same<T, float>::value && prop.major >= 8) ||
+                         (std::is_same<T, double>::value && prop.major >= 8))) {
+                        spFormat = FORMAT_ELL;
+                    } else if (!bsr.j_has_negative_indices) {
+                        spFormat = block_size == 1 ? FORMAT_CSR : FORMAT_BSR;
                     } else {
-                        implementation_ = "cusparse_ell";
-                        gpuSparseCheck(cusparseCreateBlockedEll(
-                            &*descrA_other, num_rows / ki,
-                            num_cols / kd * (is_kron ? kron_disp_rev.size() : 1), block_size,
-                            block_size * kron_disp_rev.size(), jj.data(), v.it.data(),
-                            CUSPARSE_INDEX_32I, CUSPARSE_INDEX_BASE_ZERO, toCudaDataType<T>()));
+                        throw std::runtime_error("bsr: unsupported -1 column indices when using "
+                                                 "cuSPARSE and not using ELL");
                     }
+
+                    if (spFormat == FORMAT_BSR) {
+                        implementation_ = "cusparse_bsr";
+                        allowLayout = ColumnMajorForY;
+                        preferredLayout = !is_kron ? RowMajor : ColumnMajor;
+                        descrA_bsr = std::shared_ptr<cusparseMatDescr_t>(
+                            new cusparseMatDescr_t, [](cusparseMatDescr_t *p) {
+                                cusparseDestroyMatDescr(*p);
+                                delete p;
+                            });
+                        gpuSparseCheck(cusparseCreateMatDescr(&*descrA_bsr));
+                        gpuSparseCheck(
+                            cusparseSetMatIndexBase(*descrA_bsr, CUSPARSE_INDEX_BASE_ZERO));
+                        gpuSparseCheck(
+                            cusparseSetMatType(*descrA_bsr, CUSPARSE_MATRIX_TYPE_GENERAL));
+                    } else {
+                        static_assert(sizeof(IndexType) == 4,
+                                      "unsupported integer other than 32 bits");
+                        IndexType num_cols = volume(v.dimd);
+                        IndexType num_rows = volume(v.dimi);
+                        IndexType ki = volume(v.kroni);
+                        IndexType kd = volume(v.krond);
+                        descrA_other = std::shared_ptr<cusparseSpMatDescr_t>(
+                            new cusparseSpMatDescr_t, [](cusparseSpMatDescr_t *p) {
+                                cusparseDestroySpMat(*p);
+                                delete p;
+                            });
+                        allowLayout = SameLayoutForXAndY;
+                        preferredLayout = RowMajor;
+                        if (spFormat == FORMAT_CSR) {
+                            implementation_ = "cusparse_csr";
+                            gpuSparseCheck(cusparseCreateCsr(
+                                &*descrA_other, num_rows / ki,
+                                num_cols / kd * (is_kron ? kron_disp_rev.size() : 1), bsr.nnz,
+                                ii.data(), jj.data(), v.it.data(), CUSPARSE_INDEX_32I,
+                                CUSPARSE_INDEX_32I, CUSPARSE_INDEX_BASE_ZERO, toCudaDataType<T>()));
+                        } else {
+                            implementation_ = "cusparse_ell";
+                            gpuSparseCheck(cusparseCreateBlockedEll(
+                                &*descrA_other, num_rows / ki,
+                                num_cols / kd * (is_kron ? kron_disp_rev.size() : 1), block_size,
+                                block_size * kron_disp_rev.size(), jj.data(), v.it.data(),
+                                CUSPARSE_INDEX_32I, CUSPARSE_INDEX_BASE_ZERO, toCudaDataType<T>()));
+                        }
+                    }
+                } else {
+                    implementation_ = "cuda_mmfa";
+                    allowLayout = RowMajorForXandY;
+                    preferredLayout = RowMajor;
                 }
 #    else
                 if (bsr.j_has_negative_indices)
@@ -918,119 +927,119 @@ namespace superbblas {
                     preferredLayout = RowMajor;
                 }
 #    endif
-            }
+        }
 
-            /// Return the number of flops for a given number of right-hand-sides
-            /// \param rhs: number of vectors to multiply
+        /// Return the number of flops for a given number of right-hand-sides
+        /// \param rhs: number of vectors to multiply
 
-            double getFlopsPerMatvec(int rhs, MatrixLayout layout) const {
-                double b = (double)volume(v.blocki);
-                double ki = (double)volume(v.kroni), kd = (double)volume(v.krond);
+        double
+        getFlopsPerMatvec(int rhs, MatrixLayout layout) const {
+            double b = (double)volume(v.blocki);
+            double ki = (double)volume(v.kroni), kd = (double)volume(v.krond);
 
-                // For the Kronecker variant, each operator nonzero block will involve the contraction
-                // with the kronecker block (ki*kd*b*rhs flops) and with the rest (b*b*ki*rhs flops)
-                if (v.kron_it.size() > 0)
-                    return (layout == RowMajor ? (ki * b * b + kd * ki * b) * jj.size()
-                                               : kron_disp_rev.size() * ki * volume(v.dimd) +
-                                                     ki * b * b * jj.size()) *
-                           rhs * multiplication_cost<T>::value;
+            // For the Kronecker variant, each operator nonzero block will involve the contraction
+            // with the kronecker block (ki*kd*b*rhs flops) and with the rest (b*b*ki*rhs flops)
+            if (v.kron_it.size() > 0)
+                return (layout == RowMajor
+                            ? (ki * b * b + kd * ki * b) * jj.size()
+                            : kron_disp_rev.size() * ki * volume(v.dimd) + ki * b * b * jj.size()) *
+                       rhs * multiplication_cost<T>::value;
 
-                // For the regular variant, each operator nonzero block will involve the contraction
-                // of the block will all the rhs (b*b*rhs flops)
-                return b * b * jj.size() * rhs * multiplication_cost<T>::value;
-            }
+            // For the regular variant, each operator nonzero block will involve the contraction
+            // of the block will all the rhs (b*b*rhs flops)
+            return b * b * jj.size() * rhs * multiplication_cost<T>::value;
+        }
 
-            /// Return the number of memory operations for a given number of right-hand-sides
-            /// \param rhs: number of vectors to multiply
+        /// Return the number of memory operations for a given number of right-hand-sides
+        /// \param rhs: number of vectors to multiply
 
-            double getMemopsPerMatvec(int rhs, MatrixLayout layout) const {
-                double b = (double)volume(v.blocki);
-                double ki = (double)volume(v.kroni), kd = (double)volume(v.krond);
+        double getMemopsPerMatvec(int rhs, MatrixLayout layout) const {
+            double b = (double)volume(v.blocki);
+            double ki = (double)volume(v.kroni), kd = (double)volume(v.krond);
 
-                // For the Kronecker variant, each operator nonzero block will involve reading the
-                // input vectors and the kronecker blocks and writing all combinations, plus
-                // reading the nonzero regular blocks and the input right-hand-size for each nonzero block
-                // and writing the output vectors
-                std::size_t nnz_per_row_proccess =
-                    (layout == RowMajor ? num_nnz_per_row : kron_disp_rev.size());
-                if (v.kron_it.size() > 0)
-                    return sizeof(T) * (
-                                           // reading the input vecs and kronecker contr.
-                                           volume(v.dimd) * (nnz_per_row_proccess + 1) * rhs +
-                                           // reading the kronecker elements
-                                           ki * kd * nnz_per_row_proccess +
-                                           // reading regular elements and the rhs
-                                           (b * b + b * rhs * ki) * jj.size() +
-                                           // writing the output
-                                           volume(v.dimi) * rhs);
+            // For the Kronecker variant, each operator nonzero block will involve reading the
+            // input vectors and the kronecker blocks and writing all combinations, plus
+            // reading the nonzero regular blocks and the input right-hand-size for each nonzero block
+            // and writing the output vectors
+            std::size_t nnz_per_row_proccess =
+                (layout == RowMajor ? num_nnz_per_row : kron_disp_rev.size());
+            if (v.kron_it.size() > 0)
+                return sizeof(T) * (
+                                       // reading the input vecs and kronecker contr.
+                                       volume(v.dimd) * (nnz_per_row_proccess + 1) * rhs +
+                                       // reading the kronecker elements
+                                       ki * kd * nnz_per_row_proccess +
+                                       // reading regular elements and the rhs
+                                       (b * b + b * rhs * ki) * jj.size() +
+                                       // writing the output
+                                       volume(v.dimi) * rhs);
 
-                // For the regular variant, each operator nonzero block will involve reading the
-                // nonzero block and the input right-hand-size, plus writing the output vectors
-                return (volume(v.dimi) * rhs + (b * b + b * rhs) * jj.size()) * sizeof(T);
-            }
+            // For the regular variant, each operator nonzero block will involve reading the
+            // nonzero block and the input right-hand-size, plus writing the output vectors
+            return (volume(v.dimi) * rhs + (b * b + b * rhs) * jj.size()) * sizeof(T);
+        }
 
-        private:
-            void matvec(T alpha, bool conjA, const T *x, IndexType ldx, MatrixLayout lx, T *y,
-                        IndexType ldy, MatrixLayout ly, IndexType ncols, T beta = T{0}) const {
-                // Check layout
-                if ((allowLayout == SameLayoutForXAndY && lx != ly) ||
-                    ((allowLayout == ColumnMajorForY || allowLayout == ColumnMajorForXandY) &&
-                     ly == RowMajor) ||
-                    (allowLayout == ColumnMajorForXandY && lx == RowMajor))
-                    throw std::runtime_error("BSR operator(): Unexpected layout");
+    private:
+        void matvec(T alpha, bool conjA, const T *x, IndexType ldx, MatrixLayout lx, T *y,
+                    IndexType ldy, MatrixLayout ly, IndexType ncols, T beta = T{0}) const {
+            // Check layout
+            if ((allowLayout == SameLayoutForXAndY && lx != ly) ||
+                ((allowLayout == ColumnMajorForY || allowLayout == ColumnMajorForXandY) &&
+                 ly == RowMajor) ||
+                (allowLayout == ColumnMajorForXandY && lx == RowMajor))
+                throw std::runtime_error("BSR operator(): Unexpected layout");
 
-                IndexType block_size = volume(v.blocki);
-                IndexType num_cols = volume(v.dimd);
-                IndexType num_rows = volume(v.dimi);
-                IndexType ki = volume(v.kroni);
-                IndexType kd = volume(v.krond);
-                IndexType block_cols = num_cols / block_size / ki;
-                IndexType block_rows = num_rows / block_size / kd;
-                IndexType num_blocks = jj.size();
-                bool is_kron = v.kron_it.size() > 0;
+            IndexType block_size = volume(v.blocki);
+            IndexType num_cols = volume(v.dimd);
+            IndexType num_rows = volume(v.dimi);
+            IndexType ki = volume(v.kroni);
+            IndexType kd = volume(v.krond);
+            IndexType block_cols = num_cols / block_size / ki;
+            IndexType block_rows = num_rows / block_size / kd;
+            IndexType num_blocks = jj.size();
+            bool is_kron = v.kron_it.size() > 0;
 
-                auto gpuSparseHandle = getGpuSparseHandle(ii.ctx());
+            auto gpuSparseHandle = getGpuSparseHandle(ii.ctx());
 #    ifdef SUPERBBLAS_USE_CUDA
-                if (spFormat == FORMAT_BSR) {
-                    gpuSparseCheck(cusparseXbsrmm(
-                        getGpuSparseHandle(ii.ctx()),
-                        v.blockImFast ? CUSPARSE_DIRECTION_COLUMN : CUSPARSE_DIRECTION_ROW,
-                        !conjA ? CUSPARSE_OPERATION_NON_TRANSPOSE
-                               : CUSPARSE_OPERATION_CONJUGATE_TRANSPOSE,
-                        lx == ColumnMajor ? CUSPARSE_OPERATION_NON_TRANSPOSE
-                                          : CUSPARSE_OPERATION_TRANSPOSE,
-                        block_rows, ncols, block_cols * (is_kron ? kron_disp_rev.size() : 1),
-                        num_blocks, alpha, *descrA_bsr, v.it.data(), ii.data(), jj.data(),
-                        block_size, x, ldx, beta, y, ldy));
-                } else {
-                    cusparseDnMatDescr_t matx, maty;
-                    cudaDataType cudaType = toCudaDataType<T>();
-                    gpuSparseCheck(cusparseCreateDnMat(
-                        &matx,
-                        !conjA ? num_cols / kd * (is_kron ? kron_disp_rev.size() : 1) : num_rows,
-                        ncols, ldx, (void *)x, cudaType,
-                        lx == ColumnMajor ? CUSPARSE_ORDER_COL : CUSPARSE_ORDER_ROW));
-                    gpuSparseCheck(cusparseCreateDnMat(
-                        &maty, !conjA ? num_rows / ki : num_cols, ncols, ldy, (void *)y, cudaType,
-                        ly == ColumnMajor ? CUSPARSE_ORDER_COL : CUSPARSE_ORDER_ROW));
-                    std::size_t bufferSize;
-                    gpuSparseCheck(cusparseSpMM_bufferSize(
-                        gpuSparseHandle,
-                        !conjA ? CUSPARSE_OPERATION_NON_TRANSPOSE
-                               : CUSPARSE_OPERATION_CONJUGATE_TRANSPOSE,
-                        CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha, *descrA_other, matx, &beta, maty,
-                        cudaType, CUSPARSE_SPMM_ALG_DEFAULT, &bufferSize));
-                    vector<T, Gpu> buffer((bufferSize + sizeof(T) - 1) / sizeof(T), ii.ctx(),
-                                          doCacheAlloc);
-                    gpuSparseCheck(cusparseSpMM(gpuSparseHandle,
-                                                !conjA ? CUSPARSE_OPERATION_NON_TRANSPOSE
-                                                       : CUSPARSE_OPERATION_CONJUGATE_TRANSPOSE,
-                                                CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha,
-                                                *descrA_other, matx, &beta, maty, cudaType,
-                                                CUSPARSE_SPMM_ALG_DEFAULT, buffer.data()));
-                    gpuSparseCheck(cusparseDestroyDnMat(matx));
-                    gpuSparseCheck(cusparseDestroyDnMat(maty));
-                }
+            if (spFormat == FORMAT_BSR) {
+                gpuSparseCheck(cusparseXbsrmm(
+                    getGpuSparseHandle(ii.ctx()),
+                    v.blockImFast ? CUSPARSE_DIRECTION_COLUMN : CUSPARSE_DIRECTION_ROW,
+                    !conjA ? CUSPARSE_OPERATION_NON_TRANSPOSE
+                           : CUSPARSE_OPERATION_CONJUGATE_TRANSPOSE,
+                    lx == ColumnMajor ? CUSPARSE_OPERATION_NON_TRANSPOSE
+                                      : CUSPARSE_OPERATION_TRANSPOSE,
+                    block_rows, ncols, block_cols * (is_kron ? kron_disp_rev.size() : 1),
+                    num_blocks, alpha, *descrA_bsr, v.it.data(), ii.data(), jj.data(), block_size,
+                    x, ldx, beta, y, ldy));
+            } else {
+                cusparseDnMatDescr_t matx, maty;
+                cudaDataType cudaType = toCudaDataType<T>();
+                gpuSparseCheck(cusparseCreateDnMat(
+                    &matx, !conjA ? num_cols / kd * (is_kron ? kron_disp_rev.size() : 1) : num_rows,
+                    ncols, ldx, (void *)x, cudaType,
+                    lx == ColumnMajor ? CUSPARSE_ORDER_COL : CUSPARSE_ORDER_ROW));
+                gpuSparseCheck(cusparseCreateDnMat(
+                    &maty, !conjA ? num_rows / ki : num_cols, ncols, ldy, (void *)y, cudaType,
+                    ly == ColumnMajor ? CUSPARSE_ORDER_COL : CUSPARSE_ORDER_ROW));
+                std::size_t bufferSize;
+                gpuSparseCheck(cusparseSpMM_bufferSize(
+                    gpuSparseHandle,
+                    !conjA ? CUSPARSE_OPERATION_NON_TRANSPOSE
+                           : CUSPARSE_OPERATION_CONJUGATE_TRANSPOSE,
+                    CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha, *descrA_other, matx, &beta, maty,
+                    cudaType, CUSPARSE_SPMM_ALG_DEFAULT, &bufferSize));
+                vector<T, Gpu> buffer((bufferSize + sizeof(T) - 1) / sizeof(T), ii.ctx(),
+                                      doCacheAlloc);
+                gpuSparseCheck(cusparseSpMM(gpuSparseHandle,
+                                            !conjA ? CUSPARSE_OPERATION_NON_TRANSPOSE
+                                                   : CUSPARSE_OPERATION_CONJUGATE_TRANSPOSE,
+                                            CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha, *descrA_other,
+                                            matx, &beta, maty, cudaType, CUSPARSE_SPMM_ALG_DEFAULT,
+                                            buffer.data()));
+                gpuSparseCheck(cusparseDestroyDnMat(matx));
+                gpuSparseCheck(cusparseDestroyDnMat(maty));
+            }
 #    else
                 gpuSparseCheck(hipsparseXbsrmm(
                     gpuSparseHandle,
@@ -1161,7 +1170,7 @@ namespace superbblas {
                 assert(vy.size() == (std::size_t)(block_size * block_rows * ncols * ki));
                 assert(v.kron_it.size() == (std::size_t)(kd * ki * num_nnz_per_row));
 
-#    ifdef SUPERBBLAS_USE_HIP
+#    ifdef SUPERBBLAS_USE_GPU
                 if (kron_use_crafted_kernel) {
                     assert(lx == RowMajor && ly == RowMajor);
                     assert(ldx >= kd * ncols && ldy >= kd * ncols);
@@ -1173,7 +1182,7 @@ namespace superbblas {
                     causalConnectTo(ii.ctx(), vy_.ctx());
                     return;
                 }
-#    endif // SUPERBBLAS_USE_HIP
+#    endif // SUPERBBLAS_USE_GPU
 
                 if (ly == RowMajor && lx == RowMajor) {
                     assert(ldy == ki * ncols);
