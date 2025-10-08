@@ -13,7 +13,7 @@
 #    define SUPERBBLAS_GENERATE_KERNELS
 #endif
 
-#if defined(SUPERBBLAS_USE_HIP) && defined(SUPERBBLAS_GENERATE_KERNELS)
+#if defined(SUPERBBLAS_USE_CUDA) && defined(SUPERBBLAS_GENERATE_KERNELS)
 #    if __CUDA_ARCH__ >= 800
 #        define SUPERBBLAS_CUDA_SUPPORTS_TENSOR_CORES_FOR_DOUBLES
 #    endif
@@ -66,9 +66,7 @@
 namespace superbblas {
     namespace detail {
 
-#ifdef SUPERBBLAS_USE_HIP
-
-        template <typename T> struct bsr_kron_3x3_4x4perm_kernel;
+#ifdef SUPERBBLAS_USE_GPU
 
         __host__ __device__ inline int get_a_idx(int a_ldr, int a_ldc, int num_dirs, int color_row,
                                                  int color_col, int block_row, int dir) {
@@ -99,8 +97,12 @@ namespace superbblas {
         __host__ __device__ inline int get_jj_idx(int num_dirs, int block_row, int dir) {
             return dir + num_dirs * block_row;
         }
+#endif // SUPERBBLAS_USE_GPU
 
-	/// Default implementation for unsupported types
+#ifdef SUPERBBLAS_USE_HIP
+        template <typename T> struct bsr_kron_3x3_4x4perm_kernel;
+
+        /// Default implementation for unsupported types
 
         template <typename T> struct bsr_kron_3x3_4x4perm_kernel {
             static constexpr bool type_available() { return false; }
@@ -391,7 +393,8 @@ namespace superbblas {
 #endif // SUPERBBLAS_USE_HIP
 #ifdef SUPERBBLAS_USE_CUDA
 
-	/// Default implementation for unsupported types
+#    ifdef SUPERBBLAS_GENERATE_KERNELS
+        /// Default implementation for unsupported types
 
         template <typename T> struct bsr_kron_3x3_4x4perm_kernel {
             static constexpr bool type_available() { return false; }
@@ -443,20 +446,21 @@ namespace superbblas {
         };
 
         template <>
-        __global__ void bsr_kron_3x3_4x4perm_kernel_available<std::complex<double>>(int *flag) {
-#    if defined(SUPERBBLAS_CUDA_SUPPORTS_TENSOR_CORES_FOR_DOUBLES)
+        inline __global__ void
+        bsr_kron_3x3_4x4perm_kernel_available<std::complex<double>>(int *flag) {
+#        if defined(SUPERBBLAS_CUDA_SUPPORTS_TENSOR_CORES_FOR_DOUBLES)
             *flag = 1;
-#    else
+#        else
             *flag = 0;
-#    endif
+#        endif
         }
 
         template <>
-        __global__ void bsr_kron_3x3_4x4perm_kernel_fun<std::complex<double>>(
+        inline __global__ void bsr_kron_3x3_4x4perm_kernel_fun<std::complex<double>>(
             const double *a, int a_ldr, int a_ldc, int *jj, int block_rows, int num_dirs,
             const double *perm_scalars, const int *perm, const double *x, int ldx, double *y,
             int ldy, int ncols) {
-#    if defined(SUPERBBLAS_CUDA_SUPPORTS_TENSOR_CORES_FOR_DOUBLES)
+#        if defined(SUPERBBLAS_CUDA_SUPPORTS_TENSOR_CORES_FOR_DOUBLES)
             (void)block_rows;
             double c[2] = {0, 0}; ///< accumulator
             double d[2] = {0, 0}; ///< result
@@ -483,7 +487,7 @@ namespace superbblas {
                 bool x_is_zero = (x_color == 3 || col >= ncols);
                 int x_idx = get_xy_idx_complex(ldx, ncols, x_color, perm[4 * dir + x_spin],
                                                jj[get_jj_idx(num_dirs, blk_row, dir)], col);
-                double x_val = 0.0, x_val_i = 0.0;
+                double x_val_r = 0.0, x_val_i = 0.0;
                 int s_dir = (4 * dir + x_spin) * 2;
                 const double s_r = perm_scalars[s_dir], s_i = perm_scalars[s_dir + 1];
                 if (!x_is_zero) x_val_r = x[x_idx], x_val_i = x[x_idx + 1];
@@ -492,14 +496,15 @@ namespace superbblas {
                 const double x_val = x_re == 0 ? x_val_r : x_val_i;
 
                 // Use MMA intrinsic for matrix multiplication D = A*B + C
-                c = d;
+                c[0] = d[0];
+                c[1] = d[1];
                 asm volatile("mma.sync.aligned.m8n8k4.row.col.f64.f64.f64.f64 "
                              "{%0, %1}, "
                              "{%2}, "
                              "{%3}, "
                              "{%4, %5};"
                              : "=d"(d[0]), "=d"(d[1])
-                             : "d"(a_val), "d"(b_val), "d"(c[0]), "d"(c[1]));
+                             : "d"(a_val), "d"(x_val), "d"(c[0]), "d"(c[1]));
             }
             bool y_is_zero = (y_color == 3 || col >= ncols);
             int y_idx0 = get_xy_idx_complex(ldy, ncols, y_color, y_spin, blk_row, col);
@@ -519,13 +524,13 @@ namespace superbblas {
                 source_thr = (y_color + 4) * 4 + y_spin / 2, di = 1;
             else /* if (y_re0 == 1 && y_re1 == 0) */
                 source_thr = (y_color + 4) + 2 + y_spin / 2, di = 0;
-            const double d_other = __long_long_as_double(
-                __shfl_sync(0xffffffff, __double_as_long_long(d[di]), source_thr));
+            const double d_other = __longlong_as_double(
+                __shfl_sync(0xffffffff, __double_as_longlong(d[di]), source_thr));
             if (!y_is_zero && y_re0 == 0 && y_re1 == 0) y[y_idx0] = d[0] + d_other;
             if (!y_is_zero && y_re0 == 1 && y_re1 == 1) y[y_idx1] = d[1] + d_other;
             if (!y_is_zero && y_re0 == 0 && y_re1 == 1) y[y_idx0 + 1] = d[0] + d_other;
             if (!y_is_zero && y_re0 == 1 && y_re1 == 0) y[y_idx1 + 1] = d[0] + d_other;
-#    else
+#        else
             (void)a;
             (void)a_ldr;
             (void)a_ldc;
@@ -539,13 +544,13 @@ namespace superbblas {
             (void)y;
             (void)ldy;
             (void)ncols;
-#    endif // defined(SUPERBBLAS_ROCM_SUPPORTS_TENSOR_CORES_FOR_DOUBLES)
+#        endif // defined(SUPERBBLAS_ROCM_SUPPORTS_TENSOR_CORES_FOR_DOUBLES)
         }
 
         /// Implementation for complex single
-	/// NOTE: in progress
+        /// NOTE: in progress
 
-#    if 0
+#        if 0
 
         template <> struct bsr_kron_3x3_4x4perm_kernel<std::complex<float>> {
             static constexpr bool type_available() { return true; }
@@ -561,11 +566,11 @@ namespace superbblas {
 
         template <>
         __global__ void bsr_kron_3x3_4x4perm_kernel_available<std::complex<float>>(int *flag) {
-#        if defined(SUPERBBLAS_CUDA_SUPPORTS_TENSOR_CORES)
+#            if defined(SUPERBBLAS_CUDA_SUPPORTS_TENSOR_CORES)
             *flag = 1;
-#        else
+#            else
             *flag = 0;
-#        endif
+#            endif
         }
 
         template <>
@@ -573,7 +578,7 @@ namespace superbblas {
             const float *a, int a_ldr, int a_ldc, int *jj, int block_rows, int num_dirs,
             const float *perm_scalars, const int *perm, const float *x, int ldx, float *y, int ldy,
             int ncols) {
-#        if defined(SUPERBBLAS_CUDA_SUPPORTS_TENSOR_CORES)
+#            if defined(SUPERBBLAS_CUDA_SUPPORTS_TENSOR_CORES)
             (void)block_rows;
             float c[2] = {0, 0, 0, 0}; ///< accumulator
             float d[2] = {0, 0, 0, 0}; ///< result
@@ -647,7 +652,7 @@ namespace superbblas {
             if (!y_is_zero && y_re0 == 1 && y_re1 == 1) y[y_idx1] = d[1] + d_other;
             if (!y_is_zero && y_re0 == 0 && y_re1 == 1) y[y_idx0 + 1] = d[0] + d_other;
             if (!y_is_zero && y_re0 == 1 && y_re1 == 0) y[y_idx1 + 1] = d[0] + d_other;
-#        else
+#            else
             (void)a;
             (void)a_ldr;
             (void)a_ldc;
@@ -661,9 +666,10 @@ namespace superbblas {
             (void)y;
             (void)ldy;
             (void)ncols;
-#        endif // defined(SUPERBBLAS_ROCM_SUPPORTS_TENSOR_CORES_FOR_DOUBLES)
+#            endif // defined(SUPERBBLAS_ROCM_SUPPORTS_TENSOR_CORES_FOR_DOUBLES)
         }
-#    endif
+#        endif
+#    endif // SUPERBBLAS_GENERATE_KERNELS
 
         /// Computes the BSR-kron matrix vector multiplication
         /// \param a: a[r*a_ldr+c*a_ldc+j*9] is the nonzero value at row r+3*I and column c+jj[j]
