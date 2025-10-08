@@ -441,7 +441,7 @@ namespace superbblas {
             static dim3 block_size() { return dim3(32, 1, 1); }
 
             static dim3 grid_size(int block_rows, int num_cols) {
-                return dim3((num_cols + 3) / 4, block_rows, 1);
+                return dim3(block_rows, (num_cols + 3) / 4, 1);
             }
         };
 
@@ -464,8 +464,8 @@ namespace superbblas {
             (void)block_rows;
             double c[2] = {0, 0}; ///< accumulator
             double d[2] = {0, 0}; ///< result
-            auto col = blockIdx.x * 4 + (threadIdx.x / 4) % 4;
-            auto blk_row = blockIdx.y;
+            auto col = blockIdx.y * 4 + (threadIdx.x / 4) % 4;
+            auto blk_row = blockIdx.x;
             auto a_row = (threadIdx.x / 4) % 4;
             auto a_col = threadIdx.x % 4;
             auto x_color = threadIdx.x % 4;
