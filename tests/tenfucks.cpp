@@ -119,6 +119,89 @@ template <typename SCALAR> void test_gpu(const Gpu &xpu) {
     }
 }
 
+template <typename T> struct aux {
+    static T normal_value() { return T{1}; }
+    static T cond_conj(bool, T v) { return v; }
+};
+template <typename T> struct aux<std::complex<T>> {
+    static std::complex<T> normal_value() { return std::complex<T>{1, .5}; }
+    static std::complex<T> cond_conj(bool conj, std::complex<T> v) {
+        return !conj ? v : std::conj(v);
+    }
+};
+
+template <typename SCALAR>
+void test_inner_prod_gpu(const Gpu &xpu) {
+    const std::unordered_map<std::type_index, std::string> type_to_string{
+        {std::type_index(typeid(float)), "float"},
+        {std::type_index(typeid(double)), "double"},
+        {std::type_index(typeid(std::complex<float>)), "complex float"},
+        {std::type_index(typeid(std::complex<double>)), "complex double"}};
+
+    std::cout << "Testing " << type_to_string.at(std::type_index(typeid(SCALAR))) << std::endl;
+
+    const auto m = 10000, max_n = 5;
+    vector<SCALAR, Cpu> a_cpu(m * max_n, Cpu{});
+    const auto nval = aux<SCALAR>::normal_value();
+    for (size_t i = 0; i < a_cpu.size(); ++i) a_cpu[i] = nval * SCALAR{std::log(1.f * (i + 1))};
+    auto a = makeSure(a_cpu, xpu);
+    vector<SCALAR, Cpu> b_cpu(m * max_n, Cpu{});
+    for (size_t i = 0; i < b_cpu.size(); ++i) b_cpu[i] = nval * SCALAR{std::log(1.f * (i + 3))};
+    auto b = makeSure(b_cpu, xpu);
+    vector<SCALAR, Cpu> o_cpu(max_n, Cpu{});
+    for (size_t i = 0; i < o_cpu.size(); ++i)
+        o_cpu[i] = nval * SCALAR{1.f * i};
+    const auto alpha = nval;
+    const auto beta = nval * SCALAR{.5};
+
+    auto exact_result = [=](SCALAR alpha, SCALAR beta, bool conja, bool conjb) {
+        std::vector<SCALAR> r0(max_n);
+        for (int j = 0; j < max_n; j++) {
+            SCALAR r0j{0};
+            for (int i = 0; i < m; ++i) {
+                r0j += aux<SCALAR>::cond_conj(conja, a_cpu[i + m * j]) *
+                       aux<SCALAR>::cond_conj(conjb, b_cpu[i + m * j]);
+            }
+            r0[j] = alpha * r0j + beta * o_cpu[j];
+        }
+        return r0;
+    };
+
+    for (int n = 1; n <= max_n; ++n) {
+        std::cout << ".. for rhs= " << n << std::endl;
+        vector<SCALAR, Gpu> r(n, xpu);
+        for (bool conja : std::vector<bool>{false, true}) {
+            for (bool conjb : std::vector<bool>{false, true}) {
+                inner_prod_gpu(m, n, alpha, a.data(), 1, m, conja, b.data(), 1, m, conjb, SCALAR{0},
+                               r.data(), 1, xpu);
+                auto r_cpu = makeSure(r, Cpu{});
+
+                const auto r0 = exact_result(alpha, 0, conja, conjb);
+
+                double d = 0, nd = 0;
+                for (int i = 0; i < n; ++i) d += std::norm(r0[i] - r_cpu[i]);
+                for (int i = 0; i < n; ++i) nd += std::norm(r_cpu[i]);
+                std::cout << "Error: " << std::sqrt(d/nd) << std::endl;
+            }
+        }
+        for (bool conja : std::vector<bool>{false, true}) {
+            for (bool conjb : std::vector<bool>{false, true}) {
+                r = makeSure(o_cpu, xpu);
+                inner_prod_gpu(m, n, alpha, a.data(), 1, m, conja, b.data(), 1, m, conjb, beta,
+                               r.data(), 1, xpu);
+                auto r_cpu = makeSure(r, Cpu{});
+
+                const auto r0 = exact_result(alpha, beta, conja, conjb);
+
+                double d = 0, nd = 0;
+                for (int i = 0; i < n; ++i) d += std::norm(r0[i] - r_cpu[i]);
+                for (int i = 0; i < n; ++i) nd += std::norm(r_cpu[i]);
+                std::cout << "Error: " << std::sqrt(d/nd) << std::endl;
+            }
+        }
+    }
+}
+
 int main(int, char **) {
 #ifdef SUPERBBLAS_USE_FLOAT16
     test<std::complex<_Float16>>();
@@ -129,6 +212,10 @@ int main(int, char **) {
     {
         Context ctx = createGpuContext(0);
         test_gpu<std::complex<double>>(ctx.toGpu(0));
+        test_inner_prod_gpu<float>(ctx.toGpu(0));
+        test_inner_prod_gpu<double>(ctx.toGpu(0));
+        test_inner_prod_gpu<std::complex<float>>(ctx.toGpu(0));
+        test_inner_prod_gpu<std::complex<double>>(ctx.toGpu(0));
     }
 #endif
 

@@ -8,11 +8,6 @@
 
 #include "platform.h"
 
-#if defined(SUPERBBLAS_USE_GPU) && !defined(SUPERBBLAS_CREATING_FLAGS) &&                          \
-    !defined(SUPERBBLAS_CREATING_LIB) && !defined(SUPERBBLAS_LIB)
-#    define SUPERBBLAS_GENERATE_KERNELS
-#endif
-
 #if defined(SUPERBBLAS_USE_CUDA) && defined(SUPERBBLAS_GENERATE_KERNELS)
 #    if __CUDA_ARCH__ >= 800
 #        define SUPERBBLAS_CUDA_SUPPORTS_TENSOR_CORES_FOR_DOUBLES
@@ -361,6 +356,7 @@ namespace superbblas {
                 if (!bsr_kron_3x3_4x4perm_kernel<T>::type_available())
                     throw std::runtime_error("wtf!");
                 using ptr = typename bsr_kron_3x3_4x4perm_kernel<T>::ptr;
+                setDevice(xpu);
                 hipExtLaunchKernelGGL(bsr_kron_3x3_4x4perm_kernel<T>::fun,
                                       bsr_kron_3x3_4x4perm_kernel<T>::grid_size(block_rows, ncols),
                                       bsr_kron_3x3_4x4perm_kernel<T>::block_size(),
@@ -737,6 +733,7 @@ namespace superbblas {
                 using ptr = typename bsr_kron_3x3_4x4perm_kernel<T>::ptr;
                 const auto grid = bsr_kron_3x3_4x4perm_kernel<T>::grid_size(block_rows, ncols);
                 const auto blk = bsr_kron_3x3_4x4perm_kernel<T>::block_size();
+                setDevice(xpu);
                 bsr_kron_3x3_4x4perm_kernel_fun<T><<<grid, blk, 0, getStream(xpu)>>>(
                     (const ptr)a, a_ldr, a_ldc, jj, 1, num_dirs, (const ptr)perm_scalars, perm,
                     (const ptr)x, ldx, (ptr)y, ldy, ncols);

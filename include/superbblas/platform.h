@@ -77,6 +77,11 @@ EMIT_define(SUPERBBLAS_USE_MKL)
 #    define SUPERBBLAS_USE_GPU
 #endif
 
+#if defined(SUPERBBLAS_USE_GPU) && !defined(SUPERBBLAS_CREATING_FLAGS) &&                          \
+    !defined(SUPERBBLAS_CREATING_LIB) && !defined(SUPERBBLAS_LIB)
+#    define SUPERBBLAS_GENERATE_KERNELS
+#endif
+
 #define SUPERBBLAS_CONCATX(a, b) a##b
 #define SUPERBBLAS_CONCAT(a, b) SUPERBBLAS_CONCATX(a, b)
 
