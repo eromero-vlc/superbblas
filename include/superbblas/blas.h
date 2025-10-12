@@ -551,7 +551,7 @@ namespace superbblas {
         /// \tparam is_complex: whether the type is complex
         ///
         /// NOTE: the result partial(i,j) is the ith partial inner product of a(:,j) and b(:,j)
-        ///       and there are gridDim.x partial inner products.
+        ///       and there are gridDim.y partial inner products.
 
         template <typename T, bool is_complex>
         inline __global__ void inner_prod_partial_gpu(int m, int n, const T *a, int ldra, int ldca,
@@ -560,8 +560,8 @@ namespace superbblas {
             constexpr auto C = (!is_complex ? 1 : 2);
             __shared__ T cache[256 * C];
 
-            int row = threadIdx.x + blockIdx.x * blockDim.x;
-            int col = blockIdx.y;
+            int row = threadIdx.x + blockIdx.y * blockDim.x;
+            int col = blockIdx.x;
             int cacheIdx = threadIdx.x;
 
             T temp[C] = {{}};
@@ -578,7 +578,7 @@ namespace superbblas {
                     temp[0] += ar * br - ai * bi;
                     temp[1] += ar * bi + ai * br;
                 }
-                row += blockDim.x * gridDim.x;
+                row += blockDim.x * gridDim.y;
             }
 
             if (!is_complex) {
@@ -606,10 +606,10 @@ namespace superbblas {
 
             if (cacheIdx == 0) {
                 if (!is_complex) {
-                    partial[blockIdx.x + gridDim.x * col] = cache[0];
+                    partial[blockIdx.y + gridDim.y * col] = cache[0];
                 } else {
-                    partial[(blockIdx.x + gridDim.x * col) * 2] = cache[0];
-                    partial[(blockIdx.x + gridDim.x * col) * 2 + 1] = cache[1];
+                    partial[(blockIdx.y + gridDim.y * col) * 2] = cache[0];
+                    partial[(blockIdx.y + gridDim.y * col) * 2 + 1] = cache[1];
                 }
             }
         }
@@ -618,20 +618,20 @@ namespace superbblas {
         /// \param n: number of vectors
 	/// \param alpha: factor to apply to the inner products
         /// \param partial: pointer to the partial inner products block
-	/// \param gridDimx: rows of partial
+	/// \param gridDimy: rows of partial
 	/// \param beta: factor to apply to `r`
 	/// \param r: pointer to the final results of the inner products
 	/// \param ldr: jump to the next element in r
         /// \tparam T: basic type, the type of the real component
 	///
-	/// NOTE: r(i) = beta*r(i) + alpha*\sum_{j=0:gridDimx-1} partial(j,i)
+	/// NOTE: r(i) = beta*r(i) + alpha*\sum_{j=0:gridDimy-1} partial(j,i)
 
         template <typename T>
-        inline __global__ void inner_prod_gpu_real(int n, T alpha, const T *partial, int gridDimx,
+        inline __global__ void inner_prod_gpu_real(int n, T alpha, const T *partial, int gridDimy,
                                                    T beta, T *r, int ldr) {
-            const int col = blockIdx.y;
+            const int col = blockIdx.x;
             T temp = 0;
-            for (int i = 0; i < gridDimx; ++i) temp += partial[i + col * gridDimx];
+            for (int i = 0; i < gridDimy; ++i) temp += partial[i + col * gridDimy];
             if (beta * beta == T{0})
                 r[ldr * col] = alpha * temp;
             else
@@ -640,12 +640,12 @@ namespace superbblas {
 
         template <typename T>
         inline __global__ void inner_prod_gpu_cmplx(int n, T alphar, T alphai, const T *partial,
-                                                    int gridDimx, T betar, T betai, T *r, int ldr) {
-            const int col = blockIdx.y;
+                                                    int gridDimy, T betar, T betai, T *r, int ldr) {
+            const int col = blockIdx.x;
             T temp[2] = {T{0}, T{0}};
-            for (int i = 0; i < gridDimx; ++i) {
-                temp[0] += partial[(i + col * gridDimx) * 2];
-                temp[1] += partial[(i + col * gridDimx) * 2 + 1];
+            for (int i = 0; i < gridDimy; ++i) {
+                temp[0] += partial[(i + col * gridDimy) * 2];
+                temp[1] += partial[(i + col * gridDimy) * 2 + 1];
             }
             T alphatemp_r = alphar * temp[0] - alphai * temp[1];
             T alphatemp_i = alphar * temp[1] + alphai * temp[0];
@@ -685,22 +685,22 @@ namespace superbblas {
         IMPL({
             if (n == 0) return;
             const int threads = 256;
-            const int gridDimx = std::min((m + threads - 1) / threads, 1024);
-            vector<T, Gpu> partial(gridDimx * n, xpu, doCacheAlloc);
+            const int gridDimy = std::min((m + threads - 1) / threads, 1024);
+            vector<T, Gpu> partial(gridDimy * n, xpu, doCacheAlloc);
             using R = typename the_real<T>::type;
             constexpr bool c = is_complex<T>::value;
             setDevice(xpu);
-            inner_prod_partial_gpu<R, c><<<dim3(gridDimx, n, 1), threads, 0, getStream(xpu)>>>(
+            inner_prod_partial_gpu<R, c><<<dim3(n, gridDimy, 1), threads, 0, getStream(xpu)>>>(
                 m, n, (const R *)a, ldra, ldca, conja, (const R *)b, ldrb, ldcb, conjb,
                 (R *)partial.data());
             gpuCheck(cudaGetLastError());
             if (!c) {
-                inner_prod_gpu_real<R><<<dim3(1, n, 1), 1, 0, getStream(xpu)>>>(
-                    n, std::real(alpha), (const R *)partial.data(), gridDimx, std::real(beta),
+                inner_prod_gpu_real<R><<<dim3(n, 1, 1), 1, 0, getStream(xpu)>>>(
+                    n, std::real(alpha), (const R *)partial.data(), gridDimy, std::real(beta),
                     (R *)r, ldr);
             } else {
-                inner_prod_gpu_cmplx<R><<<dim3(1, n, 1), 1, 0, getStream(xpu)>>>(
-                    n, std::real(alpha), std::imag(alpha), (const R *)partial.data(), gridDimx,
+                inner_prod_gpu_cmplx<R><<<dim3(n, 1, 1), 1, 0, getStream(xpu)>>>(
+                    n, std::real(alpha), std::imag(alpha), (const R *)partial.data(), gridDimy,
                     std::real(beta), std::imag(beta), (R *)r, ldr);
             }
             gpuCheck(cudaGetLastError());
