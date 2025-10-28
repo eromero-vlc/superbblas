@@ -901,21 +901,6 @@ namespace superbblas {
 
 #ifdef SUPERBBLAS_USE_THRUST
 
-        /// Class that compute the origin permutation
-
-        template <typename IndexType, std::size_t Nd>
-        struct perm_elem : public thrust::unary_function<IndexType, IndexType> {
-            const TCoor<Nd> from, size, dim;
-            const TCoor<Nd, IndexType> size_strides, strides;
-            perm_elem(TCoor<Nd> from, TCoor<Nd> size, TCoor<Nd> dim,
-                      TCoor<Nd, IndexType> size_strides, TCoor<Nd, IndexType> strides)
-                : from(from), size(size), dim(dim), size_strides(size_strides), strides(strides) {}
-
-            __HOST__ __DEVICE__ IndexType operator()(IndexType i) {
-                return coor2index(tplus(index2coor(i, size, size_strides), from), dim, strides);
-            }
-        };
-
         template <typename IndexType, std::size_t Nd>
         IndicesT<IndexType, Gpu>
         get_permutation_thrust(const Coor<Nd> &from, const Coor<Nd> &size, const Coor<Nd> &dim,
@@ -924,13 +909,16 @@ namespace superbblas {
             // Compute the permutation
             IndexType vol = volume(size);
             IndicesT<IndexType, Gpu> indices(vol, gpu);
-            Coor<Nd, IndexType> size_strides = get_strides<IndexType>(size, FastToSlow);
-
-            thrust::transform(thrust_par_on(gpu), thrust::make_counting_iterator(IndexType(0)),
-                              thrust::make_counting_iterator(IndexType(vol)),
+            auto size_strides0 = toTCoor(get_strides<IndexType>(size, FastToSlow));
+            auto from0 = toTCoor(from);
+            auto size0 = toTCoor(size);
+            auto dim0 = toTCoor(dim);
+            auto strides0 = toTCoor(strides);
+            auto it = thrust::make_counting_iterator<IndexType>(0);	
+            thrust::transform(thrust_par_on(gpu), it, it + vol,
                               encapsulate_pointer(indices.data()),
-                              perm_elem<IndexType, Nd>(toTCoor(from), toTCoor(size), toTCoor(dim),
-                                                       toTCoor(size_strides), toTCoor(strides)));
+                              cuda::proclaim_copyable_arguments([=] _CCCL_DEVICE(const IndexType& i) {return coor2index(tplus(index2coor(i, size0, size_strides0), from0), dim0, strides0); }));
+
             return indices;
         }
 #endif

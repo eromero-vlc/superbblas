@@ -51,6 +51,20 @@ namespace superbblas {
             using type = _Complex double;
         };
 
+#ifdef SUPERBBLAS_USE_THRUST
+        template <typename T> struct thrustcomplex {
+            using type = T;
+        };
+
+        template <> struct thrustcomplex<std::complex<float>> {
+            using type = thrust::complex<float>;
+        };
+        template <> struct thrustcomplex<std::complex<double>> {
+            using type = thrust::complex<double>;
+        };
+
+#endif // SUPERBBLAS_USE_THRUST
+
         //template <typename T> struct ccomplex<const T> {
         //    using type = const typename ccomplex<T>::type;
         //};
@@ -264,56 +278,6 @@ namespace superbblas {
         ///
 
 #ifdef SUPERBBLAS_USE_THRUST
-        /// Addition of two values with different types
-        template <typename T, typename Q> struct plus {
-            typedef T first_argument_type;
-
-            typedef Q second_argument_type;
-
-            typedef Q result_type;
-
-            __host__ __device__ result_type operator()(const T &lhs, const Q &rhs) const {
-                return lhs + rhs;
-            }
-        };
-
-        // Scala of a number
-        template <typename T>
-        struct scale : public thrust::unary_function<typename cuda_complex<T>::type,
-                                                     typename cuda_complex<T>::type> {
-            using cuda_T = typename cuda_complex<T>::type;
-            using scalar_type = typename elem<cuda_T>::type;
-            const scalar_type a;
-            scale(scalar_type a) : a(a) {}
-            __host__ __device__ cuda_T operator()(const cuda_T &i) const { return a * i; }
-        };
-
-        template <typename T, typename Q, typename IteratorV, typename IteratorW>
-        void copy_n_same_dev_thrust(const IteratorV &itv, std::size_t n, const IteratorW &itw,
-                                    EWOp::Copy, Gpu gpu) {
-            thrust::copy_n(thrust_par_on(gpu), itv, n, itw);
-        }
-
-        template <typename T, typename Q, typename IteratorV, typename IteratorW>
-        void copy_n_same_dev_thrust(const IteratorV &itv, std::size_t n, const IteratorW &itw,
-                                    EWOp::Add, Gpu gpu) {
-            thrust::transform(
-                thrust_par_on(gpu), itv, itv + n, itw, itw,
-                plus<typename cuda_complex<T>::type, typename cuda_complex<Q>::type>());
-        }
-
-        template <typename IndexType, typename T, typename Q, typename IteratorV, typename EWOP>
-        void copy_n_same_dev_thrust(const IteratorV &itv, IndexType n, Q *w,
-                                    const IndexType *indicesw, EWOP, Gpu gpu) {
-            if (indicesw == nullptr) {
-                copy_n_same_dev_thrust<T, Q>(itv, n, encapsulate_pointer(w), EWOP{}, gpu);
-            } else {
-                auto itw = thrust::make_permutation_iterator(encapsulate_pointer(w),
-                                                             encapsulate_pointer(indicesw));
-                copy_n_same_dev_thrust<T, Q>(itv, n, itw, EWOP{}, gpu);
-            }
-        }
-
         template <typename IndexType, typename T, typename Q, typename EWOP>
         void copy_n_same_dev_thrust(typename elem<T>::type alpha, const T *v,
                                     const IndexType *indicesv, Gpu xpuv, IndexType n, Q *w,
@@ -339,28 +303,75 @@ namespace superbblas {
                     },
                     xpuv);
             } else {
-                if (indicesv == nullptr) {
-                    auto itv = encapsulate_pointer(v);
-                    if (alpha == typename elem<T>::type{1}) {
-                        copy_n_same_dev_thrust<IndexType, T, Q>(itv, n, w, indicesw, EWOP{}, xpuv);
-                    } else {
-                        copy_n_same_dev_thrust<IndexType, T, Q>(
-                            thrust::make_transform_iterator(itv, scale<T>(alpha)), n, w, indicesw,
-                            EWOP{}, xpuv);
-                    }
-                } else {
-                    auto itv = thrust::make_permutation_iterator(encapsulate_pointer(v),
-                                                                 encapsulate_pointer(indicesv));
-                    if (alpha == typename elem<T>::type{1}) {
-                        copy_n_same_dev_thrust<IndexType, T, Q>(itv, n, w, indicesw, EWOP{}, xpuv);
-                    } else {
-                        copy_n_same_dev_thrust<IndexType, T, Q>(
-                            thrust::make_transform_iterator(itv, scale<T>(alpha)), n, w, indicesw,
-                            EWOP{}, xpuv);
-                    }
+                auto it = thrust::make_counting_iterator<IndexType>(0);
+                        using Tc = typename thrustcomplex<T>::type;
+                        using Qc = typename thrustcomplex<Q>::type;
+                auto vc = (Tc*)v;
+                auto wc = (Qc*)w;
+                Tc alphac(alpha);
+                if (indicesw == nullptr && std::is_same<EWOP, EWOp::Copy>::value) {
+                    if (indicesv == nullptr && alpha == typename elem<T>::type{1}) {
+                        thrust::for_each_n(thrust_par_on(xpuv), it, n,
+                            cuda::proclaim_copyable_arguments([=] _CCCL_DEVICE(const IndexType i) {wc[i] = vc[i]; }));
+                    }  else if (indicesv == nullptr && alpha != typename elem<T>::type{1}) {
+                        thrust::for_each_n(thrust_par_on(xpuv), it, n,
+                            cuda::proclaim_copyable_arguments([=] _CCCL_DEVICE(const IndexType i) {wc[i] = alphac*vc[i]; }));
+                    }  else if (indicesv != nullptr && alpha == typename elem<T>::type{1}) {
+                        thrust::for_each_n(thrust_par_on(xpuv), it, n,
+                            cuda::proclaim_copyable_arguments([=] _CCCL_DEVICE(const IndexType i) {wc[i] = vc[indicesv[i]]; }));
+                    }  else if (indicesv != nullptr && alpha != typename elem<T>::type{1}) {
+                        thrust::for_each_n(thrust_par_on(xpuv), it, n,
+                            cuda::proclaim_copyable_arguments([=] _CCCL_DEVICE(const IndexType i) {wc[i] = alphac*vc[indicesv[i]]; }));
+                    } 
                 }
-                causalConnectTo(xpuv, xpuw);
+                else if (indicesw != nullptr && std::is_same<EWOP, EWOp::Copy>::value) {
+                    if (indicesv == nullptr && alpha == typename elem<T>::type{1}) {
+                        thrust::for_each_n(thrust_par_on(xpuv), it, n,
+                            cuda::proclaim_copyable_arguments([=] _CCCL_DEVICE(const IndexType i) {wc[indicesw[i]] = vc[i]; }));
+                    }  else if (indicesv == nullptr && alpha != typename elem<T>::type{1}) {
+                        thrust::for_each_n(thrust_par_on(xpuv), it, n,
+                            cuda::proclaim_copyable_arguments([=] _CCCL_DEVICE(const IndexType i) {wc[indicesw[i]] = alphac*vc[i]; }));
+                    }  else if (indicesv != nullptr && alpha == typename elem<T>::type{1}) {
+                        thrust::for_each_n(thrust_par_on(xpuv), it, n,
+                            cuda::proclaim_copyable_arguments([=] _CCCL_DEVICE(const IndexType i) {wc[indicesw[i]] = vc[indicesv[i]]; }));
+                    }  else if (indicesv != nullptr && alpha != typename elem<T>::type{1}) {
+                        thrust::for_each_n(thrust_par_on(xpuv), it, n,
+                            cuda::proclaim_copyable_arguments([=] _CCCL_DEVICE(const IndexType i) {wc[indicesw[i]] = alphac*vc[indicesv[i]]; }));
+                    } 
+                }
+                else if (indicesw == nullptr && !std::is_same<EWOP, EWOp::Copy>::value) {
+                    if (indicesv == nullptr && alpha == typename elem<T>::type{1}) {
+                        thrust::for_each_n(thrust_par_on(xpuv), it, n,
+                            cuda::proclaim_copyable_arguments([=] _CCCL_DEVICE(const IndexType i) {wc[i] += vc[i]; }));
+                    }  else if (indicesv == nullptr && alpha != typename elem<T>::type{1}) {
+                        thrust::for_each_n(thrust_par_on(xpuv), it, n,
+                            cuda::proclaim_copyable_arguments([=] _CCCL_DEVICE(const IndexType i) {wc[i] += alphac*vc[i]; }));
+                    }  else if (indicesv != nullptr && alpha == typename elem<T>::type{1}) {
+                        thrust::for_each_n(thrust_par_on(xpuv), it, n,
+                            cuda::proclaim_copyable_arguments([=] _CCCL_DEVICE(const IndexType i) {wc[i] += vc[indicesv[i]]; }));
+                    }  else if (indicesv != nullptr && alpha != typename elem<T>::type{1}) {
+                        thrust::for_each_n(thrust_par_on(xpuv), it, n,
+                            cuda::proclaim_copyable_arguments([=] _CCCL_DEVICE(const IndexType i) {wc[i] += alphac*vc[indicesv[i]]; }));
+                    } 
+                }
+                else if (indicesw != nullptr && !std::is_same<EWOP, EWOp::Copy>::value) {
+                    if (indicesv == nullptr && alpha == typename elem<T>::type{1}) {
+                        thrust::for_each_n(thrust_par_on(xpuv), it, n,
+                            cuda::proclaim_copyable_arguments([=] _CCCL_DEVICE(const IndexType i) {wc[indicesw[i]] += vc[i]; }));
+                    }  else if (indicesv == nullptr && alpha != typename elem<T>::type{1}) {
+                        thrust::for_each_n(thrust_par_on(xpuv), it, n,
+                            cuda::proclaim_copyable_arguments([=] _CCCL_DEVICE(const IndexType i) {wc[indicesw[i]] += alphac*vc[i]; }));
+                    }  else if (indicesv != nullptr && alpha == typename elem<T>::type{1}) {
+                        thrust::for_each_n(thrust_par_on(xpuv), it, n,
+                            cuda::proclaim_copyable_arguments([=] _CCCL_DEVICE(const IndexType i) {wc[indicesw[i]] += vc[indicesv[i]]; }));
+                    }  else if (indicesv != nullptr && alpha != typename elem<T>::type{1}) {
+                        thrust::for_each_n(thrust_par_on(xpuv), it, n,
+                            cuda::proclaim_copyable_arguments([=] _CCCL_DEVICE(const IndexType i) {wc[indicesw[i]] += alphac*vc[indicesv[i]]; }));
+                    } 
+                }
+  
             }
+            causalConnectTo(xpuv, xpuw);
         }
 
         /// Set the first `n` elements to zero
@@ -759,158 +770,11 @@ namespace superbblas {
         ///
 
 #ifdef SUPERBBLAS_USE_THRUST
-
-        namespace copy_n_blocking_same_dev_thrust_ns {
-            template <typename IndexType, typename T, typename Q, typename EWOP>
-            struct copy_n_blocking_elem_v_and_w;
-
-            /// Case: w[indicesw[i]] = v[indicesv[i]]
-
-            template <typename IndexType, typename T, typename Q>
-            struct copy_n_blocking_elem_v_and_w<IndexType, T, Q, EWOp::Copy>
-                : public thrust::unary_function<IndexType, void> {
-                const T alpha;
-                const T *const SB_RESTRICT v;
-                const IndexType blocking;
-                const IndexType *const SB_RESTRICT indicesv;
-                Q *const SB_RESTRICT w;
-                const IndexType *const SB_RESTRICT indicesw;
-                copy_n_blocking_elem_v_and_w(T alpha, const T *v, IndexType blocking,
-                                             const IndexType *indicesv, Q *w,
-                                             const IndexType *indicesw)
-                    : alpha(alpha),
-                      v(v),
-                      blocking(blocking),
-                      indicesv(indicesv),
-                      w(w),
-                      indicesw(indicesw) {}
-
-                __HOST__ __DEVICE__ void operator()(IndexType i) {
-                    IndexType d = i / blocking, r = i % blocking;
-                    w[indicesw[d] + r] = alpha * v[indicesv[d] + r];
-                }
-            };
-
-            /// Case: w[indicesw[i]] += v[indicesv[i]]
-
-            template <typename IndexType, typename T, typename Q>
-            struct copy_n_blocking_elem_v_and_w<IndexType, T, Q, EWOp::Add>
-                : public thrust::unary_function<IndexType, void> {
-                const T alpha;
-                const T *const SB_RESTRICT v;
-                const IndexType blocking;
-                const IndexType *const SB_RESTRICT indicesv;
-                Q *const SB_RESTRICT w;
-                const IndexType *const SB_RESTRICT indicesw;
-                copy_n_blocking_elem_v_and_w(T alpha, const T *v, IndexType blocking,
-                                             const IndexType *indicesv, Q *w,
-                                             const IndexType *indicesw)
-                    : alpha(alpha),
-                      v(v),
-                      blocking(blocking),
-                      indicesv(indicesv),
-                      w(w),
-                      indicesw(indicesw) {}
-
-                __HOST__ __DEVICE__ void operator()(IndexType i) {
-                    IndexType d = i / blocking, r = i % blocking;
-                    w[indicesw[d] + r] += alpha * v[indicesv[d] + r];
-                }
-            };
-
-            template <typename IndexType, typename T, typename Q, typename EWOP>
-            struct copy_n_blocking_elem_w;
-
-            /// Case: w[indicesw[i]] = v[i]
-
-            template <typename IndexType, typename T, typename Q>
-            struct copy_n_blocking_elem_w<IndexType, T, Q, EWOp::Copy>
-                : public thrust::unary_function<IndexType, void> {
-                const T alpha;
-                const T *const SB_RESTRICT v;
-                const IndexType blocking;
-                Q *const SB_RESTRICT w;
-                const IndexType *const SB_RESTRICT indicesw;
-                copy_n_blocking_elem_w(T alpha, const T *v, IndexType blocking, Q *w,
-                                       const IndexType *indicesw)
-                    : alpha(alpha), v(v), blocking(blocking), w(w), indicesw(indicesw) {}
-
-                __HOST__ __DEVICE__ void operator()(IndexType i) {
-                    IndexType d = i / blocking, r = i % blocking;
-                    w[indicesw[d] + r] = alpha * v[i];
-                }
-            };
-
-            /// Case: w[indicesw[i]] += v[i]
-
-            template <typename IndexType, typename T, typename Q>
-            struct copy_n_blocking_elem_w<IndexType, T, Q, EWOp::Add>
-                : public thrust::unary_function<IndexType, void> {
-                const T alpha;
-                const T *const SB_RESTRICT v;
-                const IndexType blocking;
-                Q *const SB_RESTRICT w;
-                const IndexType *const SB_RESTRICT indicesw;
-                copy_n_blocking_elem_w(T alpha, const T *v, IndexType blocking, Q *w,
-                                       const IndexType *indicesw)
-                    : alpha(alpha), v(v), blocking(blocking), w(w), indicesw(indicesw) {}
-
-                __HOST__ __DEVICE__ void operator()(IndexType i) {
-                    IndexType d = i / blocking, r = i % blocking;
-                    w[indicesw[d] + r] += alpha * v[i];
-                }
-            };
-
-            template <typename IndexType, typename T, typename Q, typename EWOP>
-            struct copy_n_blocking_elem_v;
-
-            /// Case: w[i] = v[indicesv[i]]
-
-            template <typename IndexType, typename T, typename Q>
-            struct copy_n_blocking_elem_v<IndexType, T, Q, EWOp::Copy>
-                : public thrust::unary_function<IndexType, void> {
-                const T alpha;
-                const T *const SB_RESTRICT v;
-                const IndexType blocking;
-                const IndexType *const SB_RESTRICT indicesv;
-                Q *const SB_RESTRICT w;
-                copy_n_blocking_elem_v(T alpha, const T *v, IndexType blocking,
-                                       const IndexType *indicesv, Q *w)
-                    : alpha(alpha), v(v), blocking(blocking), indicesv(indicesv), w(w) {}
-
-                __HOST__ __DEVICE__ void operator()(IndexType i) {
-                    IndexType d = i / blocking, r = i % blocking;
-                    w[i] = alpha * v[indicesv[d] + r];
-                }
-            };
-
-            /// Case: w[i] += v[indicesv[i]]
-
-            template <typename IndexType, typename T, typename Q>
-            struct copy_n_blocking_elem_v<IndexType, T, Q, EWOp::Add>
-                : public thrust::unary_function<IndexType, void> {
-                const T alpha;
-                const T *const SB_RESTRICT v;
-                const IndexType blocking;
-                const IndexType *const SB_RESTRICT indicesv;
-                Q *const SB_RESTRICT w;
-                copy_n_blocking_elem_v(T alpha, const T *v, IndexType blocking,
-                                       const IndexType *indicesv, Q *w)
-                    : alpha(alpha), v(v), blocking(blocking), indicesv(indicesv), w(w) {}
-
-                __HOST__ __DEVICE__ void operator()(IndexType i) {
-                    IndexType d = i / blocking, r = i % blocking;
-                    w[i] += alpha * v[indicesv[d] + r];
-                }
-            };
-        }
-
         template <typename IndexType, typename T, typename Q, typename EWOP>
         void copy_n_blocking_same_dev_thrust(typename elem<T>::type alpha, const T *v,
                                              IndexType blocking, const IndexType *indicesv,
                                              Gpu xpuv, IndexType n, Q *w, const IndexType *indicesw,
                                              Gpu xpuw, EWOP) {
-            using namespace copy_n_blocking_same_dev_thrust_ns;
             if (indicesv == nullptr && indicesw == nullptr) {
                 copy_n_lower<IndexType>(alpha, v, nullptr, xpuv, n * blocking, w, nullptr, xpuw,
                                         EWOP{});
@@ -931,30 +795,72 @@ namespace superbblas {
                     },
                     xpuv);
             } else {
-                if (indicesv == nullptr && indicesw != nullptr) {
-                    thrust::for_each_n(
-                        thrust_par_on(xpuv), thrust::make_counting_iterator(IndexType(0)),
-                        blocking * n,
-                        copy_n_blocking_elem_w<IndexType, typename cuda_complex<T>::type,
-                                               typename cuda_complex<Q>::type, EWOP>(
-                            alpha, (typename cuda_complex<T>::type *)v, blocking,
-                            (typename cuda_complex<Q>::type *)w, indicesw));
-                } else if (indicesv != nullptr && indicesw == nullptr) {
-                    thrust::for_each_n(
-                        thrust_par_on(xpuv), thrust::make_counting_iterator(IndexType(0)),
-                        blocking * n,
-                        copy_n_blocking_elem_v<IndexType, typename cuda_complex<T>::type,
-                                               typename cuda_complex<Q>::type, EWOP>(
-                            alpha, (typename cuda_complex<T>::type *)v, blocking, indicesv,
-                            (typename cuda_complex<Q>::type *)w));
-                } else {
-                    thrust::for_each_n(
-                        thrust_par_on(xpuv), thrust::make_counting_iterator(IndexType(0)),
-                        blocking * n,
-                        copy_n_blocking_elem_v_and_w<IndexType, typename cuda_complex<T>::type,
-                                                     typename cuda_complex<Q>::type, EWOP>(
-                            alpha, (typename cuda_complex<T>::type *)v, blocking, indicesv,
-                            (typename cuda_complex<Q>::type *)w, indicesw));
+                auto it = thrust::make_counting_iterator<IndexType>(0);
+                        using Tc = typename thrustcomplex<T>::type;
+                        using Qc = typename thrustcomplex<Q>::type;
+                auto vc = (Tc*)v;
+                auto wc = (Qc*)w;
+                Tc alphac(alpha);
+		n *= blocking;
+                if (indicesw == nullptr && std::is_same<EWOP, EWOp::Copy>::value) {
+                    if (indicesv == nullptr && alpha == typename elem<T>::type{1}) {
+                        thrust::for_each_n(thrust_par_on(xpuv), it, n,
+                            cuda::proclaim_copyable_arguments([=] _CCCL_DEVICE(const IndexType i) {wc[i] = vc[i]; }));
+                    }  else if (indicesv == nullptr && alpha != typename elem<T>::type{1}) {
+                        thrust::for_each_n(thrust_par_on(xpuv), it, n,
+                            cuda::proclaim_copyable_arguments([=] _CCCL_DEVICE(const IndexType i) {wc[i] = alphac*vc[i]; }));
+                    }  else if (indicesv != nullptr && alpha == typename elem<T>::type{1}) {
+                        thrust::for_each_n(thrust_par_on(xpuv), it, n,
+                            cuda::proclaim_copyable_arguments([=] _CCCL_DEVICE(const IndexType i) {IndexType d = i / blocking, r = i % blocking; wc[i] = vc[indicesv[d]+r]; }));
+                    }  else if (indicesv != nullptr && alpha != typename elem<T>::type{1}) {
+                        thrust::for_each_n(thrust_par_on(xpuv), it, n,
+                            cuda::proclaim_copyable_arguments([=] _CCCL_DEVICE(const IndexType i) {IndexType d = i / blocking, r = i % blocking; wc[i] = alphac*vc[indicesv[d]+r]; }));
+                    } 
+                }
+                else if (indicesw != nullptr && std::is_same<EWOP, EWOp::Copy>::value) {
+                    if (indicesv == nullptr && alpha == typename elem<T>::type{1}) {
+                        thrust::for_each_n(thrust_par_on(xpuv), it, n,
+                            cuda::proclaim_copyable_arguments([=] _CCCL_DEVICE(const IndexType i) {IndexType d = i / blocking, r = i % blocking; wc[indicesw[d]+r] = vc[i]; }));
+                    }  else if (indicesv == nullptr && alpha != typename elem<T>::type{1}) {
+                        thrust::for_each_n(thrust_par_on(xpuv), it, n,
+                            cuda::proclaim_copyable_arguments([=] _CCCL_DEVICE(const IndexType i) {IndexType d = i / blocking, r = i % blocking; wc[indicesw[d]+r] = alphac*vc[i]; }));
+                    }  else if (indicesv != nullptr && alpha == typename elem<T>::type{1}) {
+                        thrust::for_each_n(thrust_par_on(xpuv), it, n,
+                            cuda::proclaim_copyable_arguments([=] _CCCL_DEVICE(const IndexType i) {IndexType d = i / blocking, r = i % blocking; wc[indicesw[d]+r] = vc[indicesv[d]+r]; }));
+                    }  else if (indicesv != nullptr && alpha != typename elem<T>::type{1}) {
+                        thrust::for_each_n(thrust_par_on(xpuv), it, n,
+                            cuda::proclaim_copyable_arguments([=] _CCCL_DEVICE(const IndexType i) {IndexType d = i / blocking, r = i % blocking; wc[indicesw[d]+r] = alphac*vc[indicesv[d]+r]; }));
+                    } 
+                }
+                else if (indicesw == nullptr && !std::is_same<EWOP, EWOp::Copy>::value) {
+                    if (indicesv == nullptr && alpha == typename elem<T>::type{1}) {
+                        thrust::for_each_n(thrust_par_on(xpuv), it, n,
+                            cuda::proclaim_copyable_arguments([=] _CCCL_DEVICE(const IndexType i) {wc[i] += vc[i]; }));
+                    }  else if (indicesv == nullptr && alpha != typename elem<T>::type{1}) {
+                        thrust::for_each_n(thrust_par_on(xpuv), it, n,
+                            cuda::proclaim_copyable_arguments([=] _CCCL_DEVICE(const IndexType i) {wc[i] += alphac*vc[i]; }));
+                    }  else if (indicesv != nullptr && alpha == typename elem<T>::type{1}) {
+                        thrust::for_each_n(thrust_par_on(xpuv), it, n,
+                            cuda::proclaim_copyable_arguments([=] _CCCL_DEVICE(const IndexType i) {IndexType d = i / blocking, r = i % blocking; wc[i] += vc[indicesv[d]+r]; }));
+                    }  else if (indicesv != nullptr && alpha != typename elem<T>::type{1}) {
+                        thrust::for_each_n(thrust_par_on(xpuv), it, n,
+                            cuda::proclaim_copyable_arguments([=] _CCCL_DEVICE(const IndexType i) {IndexType d = i / blocking, r = i % blocking; wc[i] += alphac*vc[indicesv[d]+r]; }));
+                    } 
+                }
+                else if (indicesw != nullptr && !std::is_same<EWOP, EWOp::Copy>::value) {
+                    if (indicesv == nullptr && alpha == typename elem<T>::type{1}) {
+                        thrust::for_each_n(thrust_par_on(xpuv), it, n,
+                            cuda::proclaim_copyable_arguments([=] _CCCL_DEVICE(const IndexType i) {IndexType d = i / blocking, r = i % blocking; wc[indicesw[d]+r] += vc[i]; }));
+                    }  else if (indicesv == nullptr && alpha != typename elem<T>::type{1}) {
+                        thrust::for_each_n(thrust_par_on(xpuv), it, n,
+                            cuda::proclaim_copyable_arguments([=] _CCCL_DEVICE(const IndexType i) {IndexType d = i / blocking, r = i % blocking; wc[indicesw[d]+r] += alphac*vc[i]; }));
+                    }  else if (indicesv != nullptr && alpha == typename elem<T>::type{1}) {
+                        thrust::for_each_n(thrust_par_on(xpuv), it, n,
+                            cuda::proclaim_copyable_arguments([=] _CCCL_DEVICE(const IndexType i) {IndexType d = i / blocking, r = i % blocking; wc[indicesw[d]+r] += vc[indicesv[d]+r]; }));
+                    }  else if (indicesv != nullptr && alpha != typename elem<T>::type{1}) {
+                        thrust::for_each_n(thrust_par_on(xpuv), it, n,
+                            cuda::proclaim_copyable_arguments([=] _CCCL_DEVICE(const IndexType i) {IndexType d = i / blocking, r = i % blocking; wc[indicesw[d]+r] += alphac*vc[indicesv[d]+r]; }));
+                    } 
                 }
             }
             causalConnectTo(xpuv, xpuw);

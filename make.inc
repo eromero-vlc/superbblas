@@ -21,15 +21,15 @@ endif
 #
 CXX ?= c++
 ifndef MKLROOT
-  BLAS_LDFLAGS ?= -lopenblas -DSUPERBBLAS_USE_CBLAS
+  BLAS_LDFLAGS ?= -L/user-environment/linux-sles15-neoverse_v2/gcc-13.3.0/openblas-0.3.28-fzip767wty4ltewko533hrsek2xhslwk/lib -lopenblas -DSUPERBBLAS_USE_CBLAS
 else
   BLAS_FLAGS ?= -I${MKLROOT}/include -DSUPERBBLAS_USE_MKL
   BLAS_LDFLAGS ?= -L${MKLROOT}/lib/intel64 -lmkl_rt -lpthread -lm -ldl
 endif
 
 
-#CXXFLAGS ?= -g -O0 -Wall -Wextra -fopenmp $(MPISBFLAG) $(BLAS_FLAGS) $(AFSFLAGS)
-CXXFLAGS ?= -Ofast -march=native -DNDEBUG -Wall -Wextra -fopenmp $(MPISBFLAG) $(BLAS_FLAGS) $(AFSFLAGS)
+CXXFLAGS ?= -g -O0 -Wall -Wextra -fopenmp $(MPISBFLAG) $(BLAS_FLAGS) $(AFSFLAGS)
+#CXXFLAGS ?= -Ofast -march=native -DNDEBUG -Wall -Wextra -fopenmp $(MPISBFLAG) $(BLAS_FLAGS) $(AFSFLAGS)
 LDFLAGS ?= $(BLAS_LDFLAGS)
 
 #
@@ -38,7 +38,8 @@ LDFLAGS ?= $(BLAS_LDFLAGS)
 NVCC ?= $(shell which nvcc)
 CUDADIR ?= $(shell dirname $(NVCC))/..
 #NVCCFLAGS ?= -x cu -g -G -arch=sm_75
-NVCCFLAGS ?= -x cu -O3 -arch=sm_75
+NVCCFLAGS ?= -x cu -O0 -arch=sm_90 --extended-lambda --ftemplate-backtrace-limit=999999 --ftemplate-depth=99999 -I/capstor/scratch/cscs/eromero/chromaform/src/cccl/thrust -I/capstor/scratch/cscs/eromero/chromaform/src/cccl/libcudacxx/include -I/capstor/scratch/cscs/eromero/chromaform/src/cccl/cub
+
 NVCCLDFLAGS ?= -lcusolver -lcusparse -lcublas -lcudart
 
 #

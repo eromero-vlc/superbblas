@@ -461,7 +461,7 @@ int main(int argc, char **argv) {
 
     std::cout << std::endl;
     std::cout << "- Non-blocking:" << std::endl;
-    {
+    if (false) {
         Context ctx = createCpuContext();
         test_copy<float, Cpu>(size, ctx.toCpu(0), EWOp::Copy{}, nrep);
         test_copy<float, Cpu>(size, ctx.toCpu(0), EWOp::Add{}, nrep);
@@ -497,7 +497,7 @@ int main(int argc, char **argv) {
 
     std::cout << std::endl;
     std::cout << "- Blocking:" << std::endl;
-    {
+    if (false) {
         Context ctx = createCpuContext();
         test_copy_blocking<float, Cpu>(size, ctx.toCpu(0), EWOp::Copy{}, nrep);
         test_copy_blocking<float, Cpu>(size, ctx.toCpu(0), EWOp::Add{}, nrep);

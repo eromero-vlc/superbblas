@@ -26,7 +26,7 @@ CPU_LIB_TARGETS := $(patsubst %.cpp,%_cpu_lib,$(SOURCES))
 CUDA_LIB_TARGETS := $(patsubst %.cpp,%_cuda_lib,$(SOURCES))
 HIP_LIB_TARGETS := $(patsubst %.cpp,%_hip_lib,$(SOURCES))
 
-SB_INCLUDE ?= -I$(BUILDDIR)/include -I$(BUILDDIR)/include/xsimd/include
+SB_INCLUDE ?= -I$(BUILDDIR)/include -I$(BUILDDIR)/include/cccl/thrust -I$(BUILDDIR)/include/cccl/libcudacxx/include -I$(BUILDDIR)/include/cccl/cub
 MPISBFLAG ?= $(if $(findstring mpi,${CXX}),-DSUPERBBLAS_USE_MPI,)
 
 comma := ,
@@ -37,7 +37,7 @@ MPILDFLAGS ?= $(if $(findstring mpi,${CXX}),\
 SB_LDFLAGS := -L$(BUILDDIR)/lib -lsuperbblas
 CUDAINCLUDE ?= -I$(CUDADIR)/include
 CUDALDFLAGS ?= -L$(CUDADIR)/lib64
-NVCCSTDLANG ?= -std c++14
+NVCCSTDLANG ?= -std c++17
 
 all_cpu: $(CPU_TARGETS)
 all_cuda: $(CUDA_TARGETS)

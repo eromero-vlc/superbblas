@@ -35,6 +35,7 @@
 #        include <thrust/iterator/permutation_iterator.h>
 #        include <thrust/iterator/transform_iterator.h>
 #        include <thrust/transform.h>
+#        include <thrust/functional.h>
 #    endif
 #endif
 
@@ -92,7 +93,7 @@ EMIT_define(SUPERBBLAS_USE_CBLAS)
 
 #    define DECL_CONJ_T(...)                                                                       \
         EMIT REPLACE1(conj, superbblas::detail::conj<T>)                                           \
-            REPLACE(T, SUPERBBLAS_COMPLEX_TYPES) template __VA_ARGS__;
+            REPLACE(T, SUPERBBLAS_TYPES) template __VA_ARGS__;
 
 #else
 #    define DECL_SUM_T(...) __VA_ARGS__
@@ -928,14 +929,6 @@ namespace superbblas {
         }
 
 #ifdef SUPERBBLAS_USE_GPU
-
-#    ifdef SUPERBBLAS_USE_THRUST
-        // Return whether the element isn't zero
-        template <typename T> struct not_zero : public thrust::unary_function<T, bool> {
-            __host__ __device__ bool operator()(const T &i) const { return i != T{0}; }
-        };
-#    endif
-
         /// Return a new array with only the elements w[i] that m[disp+v[i]] != 0
         /// \param v: vector of indices used by the mask
         /// \param m: vector of size v[disp+v.size()-1]
@@ -970,7 +963,7 @@ namespace superbblas {
                 auto itr = encapsulate_pointer(r.begin());
                 auto itmv = thrust::make_permutation_iterator(itm + disp, itv);
                 auto itr_end = thrust::copy_if(thrust_par_on(v.ctx()), itw, itw + w.size(), itmv,
-                                               itr, not_zero<T>{});
+                                               itr, cuda::proclaim_copyable_arguments([=] _CCCL_DEVICE(const T&i) {return i != static_cast<T>(0); }));
                 r.resize(itr_end - itr);
             }
             causalConnectTo(v.ctx(), w0.ctx());
@@ -982,38 +975,27 @@ namespace superbblas {
         /// Conjugate the elements of a vector
         /// \param v: vector to modify
 
-        template <typename T, typename Xpu,
-                  typename std::enable_if<!is_complex<T>::value, bool>::type = true>
-        void conj(vector<T, Xpu> &) {}
-
-        /// Conjugate the elements of a vector
-        /// \param v: vector to modify
-
-        template <typename T, typename std::enable_if<is_complex<T>::value, bool>::type = false>
+        template <typename T>
         void conj(vector<T, Cpu> &v) {
+		if constexpr(is_complex<T>::value) {
             auto *p = v.data();
             std::size_t n = v.size();
 #ifdef _OPENMP
 #    pragma omp parallel for schedule(static)
 #endif
             for (std::size_t i = 0; i < n; ++i) p[i] = std::conj(p[i]);
+		}
         }
 
 #ifdef SUPERBBLAS_USE_GPU
 
-#    ifdef SUPERBBLAS_USE_THRUST
-        // Return whether the element isn't zero
-        template <typename T> struct thrust_conj : public thrust::unary_function<T, T> {
-            __host__ __device__ T operator()(const T &i) const { return thrust::conj(i); }
-        };
-#    endif
-
         /// Conjugate the elements of a vector
         /// \param v: vector to modify
 
-        template <typename T, typename std::enable_if<is_complex<T>::value, bool>::type = false>
+        template <typename T>
         DECL_CONJ_T(void conj(vector<T, Gpu> &v))
         IMPL({
+		if constexpr(is_complex<T>::value) {
             if (deviceId(v.ctx()) == CPU_DEVICE_ID) {
                 launchHostKernel(
                     [=] {
@@ -1024,10 +1006,13 @@ namespace superbblas {
                     v.ctx());
             } else {
                 setDevice(v.ctx());
-                auto itv = encapsulate_pointer(v.begin());
-                thrust::transform(thrust_par_on(v.ctx()), itv, itv + v.size(), itv,
-                                  thrust_conj<typename cuda_complex<T>::type>{});
+		using IndexType = std::size_t;
+                auto it = thrust::make_counting_iterator<IndexType>(0);
+                auto vptr = (typename T::value_type*)v.begin();
+                thrust::for_each_n(thrust_par_on(v.ctx()), it, v.size(),
+                    cuda::proclaim_copyable_arguments([=] _CCCL_DEVICE(const IndexType& i) {auto& n = vptr[i*2+1]; n = -n; }));
             }
+	}
         })
 #endif // SUPERBBLAS_USE_GPU
 
