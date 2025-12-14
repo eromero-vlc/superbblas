@@ -1940,6 +1940,57 @@ namespace superbblas {
             return rr;
         }
 
+        /// Return a permutation that transform an o0 coordinate into an o1 coordinate
+        /// \param o0: dimension labels for the origin tensor
+        /// \param dim0: dimension size for the origin tensor
+        /// \param from0: first coordinate to copy from the origin tensor
+        /// \param size0: number of elements to copy in each dimension
+        /// \param o1: dimension labels for the destination tensor
+        /// \param dim1: dimension size for the destination tensor
+        /// \param from1: coordinate in destination tensor where first coordinate from origin tensor is copied
+        /// \param rank: rank of the current process
+        /// \param nprocs: total number of processes
+        /// \param cpu: device context
+
+        template <std::size_t Nd0, std::size_t Nd1, typename Comm, typename EWOP>
+        void check_indices_to_receive(const Proc_ranges<Nd0> &p0, const Order<Nd0> &o0,
+                                      const Coor<Nd0> &from0, const Coor<Nd0> &size0,
+                                      const Coor<Nd0> &dim0, const Proc_ranges<Nd1> &p1,
+                                      const Order<Nd1> &o1, const Coor<Nd1> &from1,
+                                      const Coor<Nd1> &dim1, const Comm &comm, EWOP,
+                                      const Range_proc_range_ranges<Nd1> &r) {
+
+            Coor<Nd1> perm0 = find_permutation(o0, o1);
+            Range_proc_range_ranges<Nd1> rr(p1[comm.rank].size());
+            for (unsigned int proc = 0; proc < comm.nprocs; ++proc) {
+                auto comm0 = comm;
+                comm0.rank = proc;
+                const auto &rp = get_indices_to_send(p0, o0, from0, size0, dim0, p1, o1, from1,
+                                                     dim1, comm0, EWOP{});
+                for (unsigned int irange0 = 0; irange0 < p0[proc].size(); ++irange0) {
+                    for (unsigned int irange1 = 0; irange1 < p1[comm.rank].size(); ++irange1) {
+                        const auto &fs01 =
+                            shift_ranges<Nd0>(rp.at(irange0).at(comm.rank).at(irange1), {{}},
+                                              p0.at(proc).at(irange0).at(0), dim0);
+                        const auto &r01 = translate_range(fs01, from0, dim0, from1, dim1, perm0);
+                        bool failed = false;
+                        if (r.at(irange1).at(proc).size() == 0) {
+                            failed = (volume(r01) > 0);
+                        } else {
+                            const auto &r01_given =
+                                shift_ranges(r.at(irange1).at(proc).at(irange0), {{}},
+                                             p1.at(comm.rank).at(irange1).at(0), dim1);
+                            failed = (r01 != r01_given);
+                        }
+                        if (failed) {
+                            throw std::runtime_error("failed consistency of get_indices_to_send "
+                                                     "and get_indices_to_receive");
+                        }
+                    }
+                }
+            }
+        }
+
         /// Check that dim0 and dim1 have the same dimensions
         /// \param o0: dimension labels for the origin tensor
         /// \param from0: first coordinate to copy from the origin tensor
@@ -2362,6 +2413,10 @@ namespace superbblas {
                                                  comm, EWOP{});
                     toReceive = get_indices_to_receive(p0, o0, from0, size0, dim0, p1, o1, from1,
                                                        dim1, comm, EWOP{});
+                    if (getDebugLevel() > 1) {
+                        check_indices_to_receive(p0, o0, from0, size0, dim0, p1, o1, from1, dim1,
+                                                 comm, EWOP{}, toReceive);
+                    }
 
                     // Check whether communications can be avoided
                     // NOTE: when doing copy, avoid doing copy if the destination pieces can be get from
