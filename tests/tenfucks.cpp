@@ -63,6 +63,7 @@ template <typename SCALAR> void test() {
     }
 }
 
+#ifdef SUPERBBLAS_USE_GPU
 template <typename SCALAR> void test_gpu(const Gpu &xpu) {
     const std::unordered_map<std::type_index, std::string> type_to_string{
         {std::type_index(typeid(std::complex<float>)), "complex float"},
@@ -201,6 +202,7 @@ void test_inner_prod_gpu(const Gpu &xpu) {
         }
     }
 }
+#endif // SUPERBBLAS_USE_GPU
 
 int main(int, char **) {
 #ifdef SUPERBBLAS_USE_FLOAT16
