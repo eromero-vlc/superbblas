@@ -735,12 +735,18 @@ namespace superbblas {
         /// Other auxiliary functions
         ///
 
-        template <typename T> void change_endianness(T *v, std::size_t n) {
+        template <typename T,
+                  typename std::enable_if<std::is_arithmetic<T>::value, bool>::type = true>
+        void change_endianness(T *v, std::size_t n) {
             for (std::size_t i = 0; i < n; ++i) {
                 char *c = (char *)&v[i];
                 for (std::size_t j = 0; j < sizeof(T) / 2; ++j)
                     std::swap(c[j], c[sizeof(T) - 1 - j]);
             }
+        }
+
+        template <typename T> void change_endianness(std::complex<T> *v, std::size_t n) {
+            change_endianness((T *)v, n * 2u);
         }
 
         struct Storage_context_abstract {
@@ -797,12 +803,16 @@ namespace superbblas {
 
             std::size_t getNdim() override { return N; }
             CommType getCommType() override { return File<Comm>::value; }
-            void flush() override { detail::flush(fh); }
+            void flush() override {
+                if (modified_for_flush) detail::flush(fh);
+            }
             void preallocate(std::size_t size) override { detail::preallocate(fh, size); }
             ~Storage_context() override {
-                detail::flush(fh);
-                std::size_t filesize = disp + (checksum == NoChecksum ? 0 : sizeof(double));
-                if (allow_writing) truncate(fh, filesize);
+                if (allow_writing) {
+                    if (modified_for_flush) detail::flush(fh);
+                    std::size_t filesize = disp + (checksum == NoChecksum ? 0 : sizeof(double));
+                    truncate(fh, filesize);
+                }
                 close(fh);
             }
         };
@@ -2038,6 +2048,7 @@ namespace superbblas {
                     }
                 }
 
+                if (do_write) sto.modified_for_flush = true;
                 break;
             }
 
@@ -2110,6 +2121,7 @@ namespace superbblas {
                     }
                 }
 
+                if (do_write) sto.modified_for_flush = true;
                 break;
             }
             }

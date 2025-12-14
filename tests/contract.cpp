@@ -337,10 +337,18 @@ void test_contraction(const T &alpha, Operator<N0, T> p0, Operator<N1, T> p1, co
     }
 }
 
+template <typename T> struct normal_value {
+    static constexpr T value = T{-1};
+};
+template <typename T> struct normal_value<std::complex<T>> {
+    static constexpr std::complex<T> value = std::complex<T>{-1, 2};
+};
+
 template <std::size_t NT, std::size_t NA, std::size_t NB, std::size_t NC, typename T, typename XPU>
 void test_third_operator(const T &alpha, Operator<NT + NA + NB, T> p0, Operator<NT + NA + NC, T> p1,
                          const std::map<char, int> &dims, const std::vector<Context> &ctx,
                          const std::vector<XPU> &xpu, unsigned int dist_index) {
+    const auto normv = normal_value<T>::value;
     test_contraction(alpha, p0, p1, T{0}, generate_tensor<NT, NB, NC, T>(sT, sB, sC, dims), ctx,
                      xpu, dist_index);
     test_contraction(alpha, p0, p1, T{0}, generate_tensor<NT, NC, NB, T>(sT, sC, sB, dims), ctx,
@@ -349,9 +357,9 @@ void test_third_operator(const T &alpha, Operator<NT + NA + NB, T> p0, Operator<
                      xpu, dist_index);
     test_contraction(alpha, p0, p1, T{1}, generate_tensor<NB, NT, NC, T>(sB, sT, sC, dims), ctx,
                      xpu, dist_index);
-    test_contraction(alpha, p0, p1, T{-1}, generate_tensor<NC, NB, NT, T>(sC, sB, sT, dims), ctx,
+    test_contraction(alpha, p0, p1, normv, generate_tensor<NC, NB, NT, T>(sC, sB, sT, dims), ctx,
                      xpu, dist_index);
-    test_contraction(alpha, p0, p1, T{-1}, generate_tensor<NC, NT, NB, T>(sC, sT, sB, dims), ctx,
+    test_contraction(alpha, p0, p1, normv, generate_tensor<NC, NT, NB, T>(sC, sT, sB, dims), ctx,
                      xpu, dist_index);
 }
 
@@ -359,6 +367,7 @@ template <std::size_t NT, std::size_t NA, std::size_t NB, std::size_t NC, typena
 void test_second_operator(Operator<NT + NA + NB, T> p0, const std::map<char, int> &dims,
                           const std::vector<Context> &ctx, const std::vector<XPU> &xpu,
                           unsigned int dist_index) {
+    const auto normv = normal_value<T>::value;
     test_third_operator<NT, NA, NB, NC, T>(
         T{0}, p0, generate_tensor<NT, NA, NC, T>(sT, sA, sC, dims), dims, ctx, xpu, dist_index);
     test_third_operator<NT, NA, NB, NC, T>(
@@ -368,9 +377,9 @@ void test_second_operator(Operator<NT + NA + NB, T> p0, const std::map<char, int
     test_third_operator<NT, NA, NB, NC, T>(
         T{1}, p0, generate_tensor<NA, NT, NC, T>(sA, sT, sC, dims), dims, ctx, xpu, dist_index);
     test_third_operator<NT, NA, NB, NC, T>(
-        T{-1}, p0, generate_tensor<NC, NA, NT, T>(sC, sA, sT, dims), dims, ctx, xpu, dist_index);
+        normv, p0, generate_tensor<NC, NA, NT, T>(sC, sA, sT, dims), dims, ctx, xpu, dist_index);
     test_third_operator<NT, NA, NB, NC, T>(
-        T{-1}, p0, generate_tensor<NC, NT, NA, T>(sC, sT, sA, dims), dims, ctx, xpu, dist_index);
+        normv, p0, generate_tensor<NC, NT, NA, T>(sC, sT, sA, dims), dims, ctx, xpu, dist_index);
 }
 
 template <std::size_t NT, std::size_t NA, std::size_t NB, std::size_t NC, typename T, typename XPU>

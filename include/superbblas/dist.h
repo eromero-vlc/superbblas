@@ -944,9 +944,8 @@ namespace superbblas {
                             IndicesT<IndexType, Cpu> indices0i_mask = indices0i.first;
                             IndexType indices0i_disp = indices0i.second;
                             if (mask0_cpu.size() > 0)
-                                indices0i_mask =
-                                    select(indices0i.first, mask0_cpu.data() + indices0i_disp,
-                                           indices0i_mask);
+                                indices0i_mask = select(indices0i.first, mask0_cpu, indices0i_disp,
+                                                        indices0i_mask);
                             std::transform(indices0i_mask.begin(), indices0i_mask.end(),
                                            indices0.begin() + n,
                                            [=](IndexType d) { return d + indices0i_disp; });
@@ -958,9 +957,8 @@ namespace superbblas {
                             IndicesT<IndexType, Cpu> indices1i_mask = indices1i.first;
                             IndexType indices1i_disp = indices1i.second;
                             if (mask0_cpu.size() > 0)
-                                indices1i_mask =
-                                    select(indices0i.first, mask0_cpu.data() + indices0i_disp,
-                                           indices1i_mask);
+                                indices1i_mask = select(indices0i.first, mask0_cpu, indices0i_disp,
+                                                        indices1i_mask);
                             IndexType dispi = disp1[rank] + indices1i_disp;
                             std::transform(indices1i_mask.begin(), indices1i_mask.end(),
                                            indices1_cpu.begin() + n,
@@ -1239,8 +1237,7 @@ namespace superbblas {
 
                                 // Apply the masks
                                 if (masks[dstrange].size() > 0)
-                                    indices1 =
-                                        select(indices1, masks[dstrange].data() + disp, indices1);
+                                    indices1 = select(indices1, masks[dstrange], disp, indices1);
                                 else
                                     indices1 = clone(indices1);
 
@@ -2714,7 +2711,7 @@ namespace superbblas {
         template <std::size_t Nd0, std::size_t Nd1, std::size_t Ndo>
         Coor<Ndo> get_dimensions(const Order<Nd0> &o0, const Coor<Nd0> &dim0, const Order<Nd1> &o1,
                                  const Coor<Nd1> &dim1, const Order<Ndo> &o_r,
-                                 bool report_inconsistencies = true) {
+                                 bool report_inconsistencies = true, IndexType missing = 0) {
             std::map<char, IndexType> m;
             for (std::size_t i = 0; i < Nd0; ++i) m[o0[i]] = dim0[i];
             for (std::size_t i = 0; i < Nd1; ++i) {
@@ -2725,7 +2722,8 @@ namespace superbblas {
                     throw std::runtime_error("Incompatible distributions for contraction");
             }
             Coor<Ndo> r;
-            for (std::size_t i = 0; i < Ndo; ++i) r[i] = m[o_r[i]];
+            for (std::size_t i = 0; i < Ndo; ++i)
+                r[i] = (report_inconsistencies || m.count(o_r[i]) == 1 ? m.at(o_r[i]) : missing);
             return r;
         }
 
@@ -3290,7 +3288,8 @@ namespace superbblas {
             const auto &pr_ = std::get<2>(p01);
             bool avoid_r_alloc =
                 (std::norm(beta) == 0 && fromr == Coor<Nd>{{}} && dimr == sizer && sug_or == o_r &&
-                 pr == pr_ && !does_proc_ranges_self_intersect(pr, dimr));
+                 pr == pr_ && !does_proc_ranges_self_intersect(pr, dimr) &&
+                 check_components_compatibility(vr, v0_));
 
             // Scale the output tensor by beta
             if (!avoid_r_alloc) {
@@ -3382,10 +3381,26 @@ namespace superbblas {
             auto t0 = dummy_normalize_copy<Nd>(p0, from0, size0, dim0, o0, v0, m);
             auto t1 = dummy_normalize_copy<Nd>(p1, from1, size1, dim1, o1, v1, m);
             auto tr = dummy_normalize_copy<Nd>(pr, fromr, sizer, dimr, o_r, vr, m);
+            std::size_t Nd0c, Nd1c, Ndoc;
+            for (Nd0c = std::min(Nd0, 1ul); Nd0c < Nd0; ++Nd0c) {
+                if (std::find(o1.begin(), o1.end(), o0[Nd0c]) != o1.end()) continue;
+                if (std::find(o_r.begin(), o_r.end(), o0[Nd0c]) != o_r.end()) continue;
+                break;
+            }
+            for (Nd1c = std::min(Nd1, 1ul); Nd1c < Nd1; ++Nd1c) {
+                if (std::find(o0.begin(), o0.end(), o1[Nd1c]) != o0.end()) continue;
+                if (std::find(o_r.begin(), o_r.end(), o1[Nd1c]) != o_r.end()) continue;
+                break;
+            }
+            for (Ndoc = std::min(Ndo, 1ul); Ndoc < Ndo; ++Ndoc) {
+                if (std::find(o0.begin(), o0.end(), o_r[Ndoc]) != o0.end()) continue;
+                if (std::find(o1.begin(), o1.end(), o_r[Ndoc]) != o1.end()) continue;
+                break;
+            }
             return contraction_normalized(
-                alpha, t0.p, t0.from, t0.size, t0.dim, t0.o, conj0, t0.v, Nd0, //
-                t1.p, t1.from, t1.size, t1.dim, t1.o, conj1, t1.v, Nd1,        //
-                beta, tr.p, tr.from, tr.size, tr.dim, tr.o, tr.v, Ndo, comm, co);
+                alpha, t0.p, t0.from, t0.size, t0.dim, t0.o, conj0, t0.v, Nd0c, //
+                t1.p, t1.from, t1.size, t1.dim, t1.o, conj1, t1.v, Nd1c,        //
+                beta, tr.p, tr.from, tr.size, tr.dim, tr.o, tr.v, Ndoc, comm, co);
         }
 
         /// Return a From_size from a partition that can be hashed and stored

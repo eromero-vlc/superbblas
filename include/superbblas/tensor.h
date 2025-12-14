@@ -883,16 +883,33 @@ namespace superbblas {
 
             // Quick exit
             IndexType vol = volume(size);
-            if (volume(size) == 0) return IndicesT<IndexType, Cpu>();
+            if (Nd == 0 || volume(size) == 0) return IndicesT<IndexType, Cpu>();
+
+            // Check for common strides
+            Coor<Nd, IndexType> size_strides = get_strides<IndexType>(size, FastToSlow);
+            IndexType block = 1;
+            for (std::size_t j = 0; j < Nd; ++j) {
+                std::size_t i = Nd - 1ul - j;
+                if (size[i] > 1 &&
+                    (size_strides[i] != strides[i] || from[i] != 0 || size[i] != dim[i]))
+                    break;
+                block *= size[i];
+		vol = vol / size[i];
+            }
 
             // Compute the permutation
-            IndicesT<IndexType, Cpu> indices(vol, cpu);
-            Coor<Nd, IndexType> size_strides = get_strides<IndexType>(size, FastToSlow);
+            IndicesT<IndexType, Cpu> indices(vol * block, cpu);
 #ifdef _OPENMP
 #    pragma omp parallel for schedule(static)
 #endif
             for (IndexType i = 0; i < vol; ++i)
                 indices[i] = coor2index(index2coor(i, size, size_strides) + from, dim, strides);
+
+#ifdef _OPENMP
+#    pragma omp parallel for schedule(static)
+#endif
+            for (IndexType i = 1; i < block; ++i)
+                for (IndexType j = 0; j < vol; ++j) indices[i * vol + j] = indices[j] + i * vol;
 
             _t.flops = vol * Nd * 2 * multiplication_cost<IndexType>::value;
             _t.memops = vol * sizeof(IndexType);
@@ -916,6 +933,19 @@ namespace superbblas {
             }
         };
 
+        /// Class that compute the origin permutation
+
+        template <typename IndexType>
+        struct perm_elem_rest : public thrust::unary_function<IndexType, IndexType> {
+            const IndexType vol;
+            IndexType *const p;
+            perm_elem_rest(IndexType vol, IndexType *p) : vol(vol), p(p) {}
+
+            __HOST__ __DEVICE__ IndexType operator()(IndexType i) {
+                return p[i % vol] + i / vol * vol;
+            }
+        };
+
         template <typename IndexType, std::size_t Nd>
         IndicesT<IndexType, Gpu>
         get_permutation_thrust(const Coor<Nd> &from, const Coor<Nd> &size, const Coor<Nd> &dim,
@@ -924,13 +954,33 @@ namespace superbblas {
             // Compute the permutation
             IndexType vol = volume(size);
             IndicesT<IndexType, Gpu> indices(vol, gpu);
+
+            // Quick exit
+            if (vol == 0) return indices;
+
+            // Check for common strides
             Coor<Nd, IndexType> size_strides = get_strides<IndexType>(size, FastToSlow);
+            IndexType block = 1;
+            for (std::size_t j = 0; j < Nd; ++j) {
+                std::size_t i = Nd - 1ul - j;
+                if (size[i] > 1 &&
+                    (size_strides[i] != strides[i] || from[i] != 0 || size[i] != dim[i]))
+                    break;
+                block *= size[i];
+		vol = vol / size[i];
+            }
 
             thrust::transform(thrust_par_on(gpu), thrust::make_counting_iterator(IndexType(0)),
                               thrust::make_counting_iterator(IndexType(vol)),
                               encapsulate_pointer(indices.data()),
                               perm_elem<IndexType, Nd>(toTCoor(from), toTCoor(size), toTCoor(dim),
                                                        toTCoor(size_strides), toTCoor(strides)));
+
+            thrust::transform(thrust_par_on(gpu), thrust::make_counting_iterator(IndexType(vol)),
+                              thrust::make_counting_iterator(IndexType(vol * block)),
+                              encapsulate_pointer(indices.data() + vol),
+                              perm_elem_rest<IndexType>(vol, indices.data()));
+
             return indices;
         }
 #endif
@@ -1075,8 +1125,8 @@ namespace superbblas {
             // Do the copy
             if (blocking == 1) {
                 if (mask0.size() > 0) {
-                    indices0 = select(indices0, mask0.data() + disp0, indices0);
-                    indices1 = select(indices1, mask1.data() + disp1, indices1);
+                    indices0 = select(indices0, mask0, disp0, indices0);
+                    indices1 = select(indices1, mask1, disp1, indices1);
                     if (indices0.size() != indices1.size())
                         throw std::runtime_error("copy: non-compatible masks");
                 }
@@ -1427,11 +1477,6 @@ namespace superbblas {
                 (!conj0 && nT > 0 && nA > 0 && nB > 0 && sA0 < sT0 && sB0 < sT0) ||
                 (conj0 && nA > 0 && ((nT > 0 && sA0 < sT0) || (nB > 0 && sA0 < sB0))) ||
                 (volC >= 1024 * 1024 && volA < 64 && volB < 64 && swap_operands && sA0 < sB0)) {
-                // Avoid non-transpose x non-transpose and non-transpose x transposed when contracting
-                // rectangular matrices
-                if (volB < 64 && volC < 64 && volA > 1024 * 1024 && !swap_operands) conj0 = true;
-                // Avoid the second matrix to be transposed when contracting rectangular and small square matrix
-                if (volC >= 1024 * 1024 && volA < 64 && volB < 64 && swap_operands) conj0 = true;
                 std::copy_n(oT.begin(), nT, sug_o0.begin());
                 std::copy_n(oA.begin(), nA, sug_o0.begin() + nT + (!conj0 ? 0 : nB));
                 std::copy_n(oB.begin(), nB, sug_o0.begin() + nT + (!conj0 ? nA : 0));
@@ -1450,13 +1495,8 @@ namespace superbblas {
             auto sC1 = std::search(o1.begin(), o1.end(), oC.begin(), oC.begin() + nC);
             if (sT1 == o1.end() || sA1 == o1.end() || sC1 == o1.end() ||
                 (!conj1 && nT > 0 && nA > 0 && nC > 0 && sA1 < sT1 && sC1 < sT1) ||
-                (conj1 && nC > 0 && ((nT > 0 && sC1 < sT1) || (nC > 0 && sC1 < sA1))) ||
+                (conj1 && nC > 0 && ((nT > 0 && sC1 < sT1) || (nA > 0 && sC1 < sA1))) ||
                 (volB >= 1024 * 1024 && volA < 64 && volC < 64 && !swap_operands && sA1 < sC1)) {
-                // Avoid non-transpose x non-transpose and non-transpose x transposed when contracting
-                // rectangular matrices
-                if (volB < 64 && volC < 64 && volA > 1024 * 1024 && swap_operands) conj1 = true;
-                // Avoid the second matrix to be transposed when contracting rectangular and small square matrix
-                if (volB >= 1024 * 1024 && volA < 64 && volC < 64 && !swap_operands) conj1 = false;
                 std::copy_n(oT.begin(), nT, sug_o1.begin());
                 std::copy_n(oC.begin(), nC, sug_o1.begin() + nT + (!conj1 ? 0 : nA));
                 std::copy_n(oA.begin(), nA, sug_o1.begin() + nT + (!conj1 ? nC : 0));

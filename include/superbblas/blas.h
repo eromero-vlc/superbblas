@@ -77,6 +77,12 @@ EMIT_define(SUPERBBLAS_USE_CBLAS)
 #        define XPU_GPU Cpu
 #    endif
 
+/// Generate template instantiations for inner_prod_gpu functions with template parameter T
+
+#    define DECL_INNER_PROD_GPU_T(...)                                                             \
+        EMIT REPLACE1(inner_prod_gpu, superbblas::detail::inner_prod_gpu<T>)                       \
+            REPLACE_T template __VA_ARGS__;
+
 /// Generate template instantiations for sum functions with template parameter T
 
 #    define DECL_SUM_T(...)                                                                        \
@@ -95,6 +101,7 @@ EMIT_define(SUPERBBLAS_USE_CBLAS)
             REPLACE(T, SUPERBBLAS_COMPLEX_TYPES) template __VA_ARGS__;
 
 #else
+#    define DECL_INNER_PROD_GPU_T(...) __VA_ARGS__
 #    define DECL_SUM_T(...) __VA_ARGS__
 #    define DECL_SELECT_T(...) __VA_ARGS__
 #    define DECL_CONJ_T(...) __VA_ARGS__
@@ -115,6 +122,16 @@ namespace superbblas {
     };
 
     namespace detail {
+
+        /// the_real<T>::type returns the real type for std::complex and T for the rest
+
+        template <typename T> struct the_real {
+            using type = T;
+        };
+
+        template <typename T> struct the_real<std::complex<T>> {
+            using type = T;
+        };
 
 #ifdef SUPERBBLAS_USE_GPU
         /// Wait until everything finishes in the given stream
@@ -516,6 +533,180 @@ namespace superbblas {
             return r;
         }
 
+#if defined(SUPERBBLAS_USE_CUDA)
+#    if defined(SUPERBBLAS_GENERATE_KERNELS)
+        /// Perform the inner product of n vectors of length m
+        /// \param m: length of the vectors
+        /// \param n: number of vectors
+        /// \param a: pointer to the first vector
+        /// \param ldra: jump to the element on the next row for a
+        /// \param ldca: jump to the element on the next column for a
+        /// \param conja: whether conjugate the elements of a
+        /// \param a: pointer to the second vector
+        /// \param ldrb: jump to the element on the next row for b
+        /// \param ldcb: jump to the element on the next column for b
+        /// \param conjb: whether conjugate the elements of b
+        /// \param partial: pointer to the result
+        /// \tparam T: basic type, the type of the real component
+        /// \tparam is_complex: whether the type is complex
+        ///
+        /// NOTE: the result partial(i,j) is the ith partial inner product of a(:,j) and b(:,j)
+        ///       and there are gridDim.y partial inner products.
+
+        template <typename T, bool is_complex>
+        inline __global__ void inner_prod_partial_gpu(int m, int n, const T *a, int ldra, int ldca,
+                                                      bool conja, const T *b, int ldrb, int ldcb,
+                                                      bool conjb, T *partial) {
+            constexpr auto C = (!is_complex ? 1 : 2);
+            __shared__ T cache[256 * C];
+
+            int row = threadIdx.x + blockIdx.y * blockDim.x;
+            int col = blockIdx.x;
+            int cacheIdx = threadIdx.x;
+
+            T temp[C] = {{}};
+            while (row < m) {
+                const int a_idx = row * ldra + col * ldca;
+                const int b_idx = row * ldrb + col * ldcb;
+                if (!is_complex) {
+                    temp[0] += a[a_idx] * b[b_idx];
+                } else {
+                    const auto ar = a[a_idx * 2];
+                    const auto ai = !conja ? a[a_idx * 2 + 1] : -a[a_idx * 2 + 1];
+                    const auto br = b[b_idx * 2];
+                    const auto bi = !conjb ? b[b_idx * 2 + 1] : -b[b_idx * 2 + 1];
+                    temp[0] += ar * br - ai * bi;
+                    temp[1] += ar * bi + ai * br;
+                }
+                row += blockDim.x * gridDim.y;
+            }
+
+            if (!is_complex) {
+                cache[cacheIdx] = temp[0];
+            } else {
+                cache[cacheIdx * 2] = temp[0];
+                cache[cacheIdx * 2 + 1] = temp[1];
+            }
+            __syncthreads();
+
+            // Reduction in shared memory
+            int i = blockDim.x / 2;
+            while (i != 0) {
+                if (cacheIdx < i) {
+                    if (!is_complex) {
+                        cache[cacheIdx] += cache[cacheIdx + i];
+                    } else {
+                        cache[cacheIdx * 2] += cache[(cacheIdx + i) * 2];
+                        cache[cacheIdx * 2 + 1] += cache[(cacheIdx + i) * 2 + 1];
+                    }
+                }
+                __syncthreads();
+                i /= 2;
+            }
+
+            if (cacheIdx == 0) {
+                if (!is_complex) {
+                    partial[blockIdx.y + gridDim.y * col] = cache[0];
+                } else {
+                    partial[(blockIdx.y + gridDim.y * col) * 2] = cache[0];
+                    partial[(blockIdx.y + gridDim.y * col) * 2 + 1] = cache[1];
+                }
+            }
+        }
+
+        /// Reduce the partial inner products generated by `inner_prod_partial_gpu` into the final ones
+        /// \param n: number of vectors
+	/// \param alpha: factor to apply to the inner products
+        /// \param partial: pointer to the partial inner products block
+	/// \param gridDimy: rows of partial
+	/// \param beta: factor to apply to `r`
+	/// \param r: pointer to the final results of the inner products
+	/// \param ldr: jump to the next element in r
+        /// \tparam T: basic type, the type of the real component
+	///
+	/// NOTE: r(i) = beta*r(i) + alpha*\sum_{j=0:gridDimy-1} partial(j,i)
+
+        template <typename T>
+        inline __global__ void inner_prod_gpu_real(int n, T alpha, const T *partial, int gridDimy,
+                                                   T beta, T *r, int ldr) {
+            const int col = blockIdx.x;
+            T temp = 0;
+            for (int i = 0; i < gridDimy; ++i) temp += partial[i + col * gridDimy];
+            if (beta * beta == T{0})
+                r[ldr * col] = alpha * temp;
+            else
+                r[ldr * col] = r[ldr * col] * beta + alpha * temp;
+        }
+
+        template <typename T>
+        inline __global__ void inner_prod_gpu_cmplx(int n, T alphar, T alphai, const T *partial,
+                                                    int gridDimy, T betar, T betai, T *r, int ldr) {
+            const int col = blockIdx.x;
+            T temp[2] = {T{0}, T{0}};
+            for (int i = 0; i < gridDimy; ++i) {
+                temp[0] += partial[(i + col * gridDimy) * 2];
+                temp[1] += partial[(i + col * gridDimy) * 2 + 1];
+            }
+            T alphatemp_r = alphar * temp[0] - alphai * temp[1];
+            T alphatemp_i = alphar * temp[1] + alphai * temp[0];
+            if (betar * betar + betai * betai == 0) {
+                r[(ldr * col) * 2] = alphatemp_r;
+                r[(ldr * col) * 2 + 1] = alphatemp_i;
+            } else {
+                const T rr = r[(ldr * col) * 2];
+                const T ri = r[(ldr * col) * 2 + 1];
+                T rbeta_r = rr * betar - ri * betai;
+                T rbeta_i = rr * betai - ri * betar;
+                r[(ldr * col) * 2] = alphatemp_r + rbeta_r;
+                r[(ldr * col) * 2 + 1] = alphatemp_i + rbeta_i;
+            }
+        }
+#    endif // defined(SUPERBBLAS_GENERATE_KERNELS)v
+
+        /// Perform the inner product of n vectors of length m
+        /// \param m: length of the vectors
+        /// \param n: number of vectors
+        /// \param a: pointer to the first vector
+        /// \param ldra: jump to the element on the next row for a
+        /// \param ldca: jump to the element on the next column for a
+        /// \param conja: whether conjugate the elements of a
+        /// \param a: pointer to the second vector
+        /// \param ldrb: jump to the element on the next row for b
+        /// \param ldcb: jump to the element on the next column for b
+        /// \param conjb: whether conjugate the elements of b
+        /// \param r: pointer to the final results of the inner products
+        /// \param ldr: jump to the next element in r
+
+        template <typename T>
+        DECL_INNER_PROD_GPU_T(void inner_prod_gpu(int m, int n, const T alpha, const T *a, int ldra,
+                                                  int ldca, bool conja, const T *b, int ldrb,
+                                                  int ldcb, bool conjb, const T beta, T *r, int ldr,
+                                                  Gpu xpu))
+        IMPL({
+            if (n == 0) return;
+            const int threads = 256;
+            const int gridDimy = std::min((m + threads - 1) / threads, 1024);
+            vector<T, Gpu> partial(gridDimy * n, xpu, doCacheAlloc);
+            using R = typename the_real<T>::type;
+            constexpr bool c = is_complex<T>::value;
+            setDevice(xpu);
+            inner_prod_partial_gpu<R, c><<<dim3(n, gridDimy, 1), threads, 0, getStream(xpu)>>>(
+                m, n, (const R *)a, ldra, ldca, conja, (const R *)b, ldrb, ldcb, conjb,
+                (R *)partial.data());
+            gpuCheck(cudaGetLastError());
+            if (!c) {
+                inner_prod_gpu_real<R><<<dim3(n, 1, 1), 1, 0, getStream(xpu)>>>(
+                    n, std::real(alpha), (const R *)partial.data(), gridDimy, std::real(beta),
+                    (R *)r, ldr);
+            } else {
+                inner_prod_gpu_cmplx<R><<<dim3(n, 1, 1), 1, 0, getStream(xpu)>>>(
+                    n, std::real(alpha), std::imag(alpha), (const R *)partial.data(), gridDimy,
+                    std::real(beta), std::imag(beta), (R *)r, ldr);
+            }
+            gpuCheck(cudaGetLastError());
+        })
+#endif // defined(SUPERBBLAS_USE_CUDA)
+
 #ifdef SUPERBBLAS_USE_GPU
         template <typename T>
         SUPERBBLAS_GPU_SELECT(xxx, cudaDataType_t, rocblas_datatype)
@@ -667,25 +858,17 @@ namespace superbblas {
                                    (const T **)&b, ldb, beta, &c, ldc, 1, xpu);
                 }
             } else {
-                auto xpu_host = xpu.toCpuPinned();
-                vector<T *, Gpu> a_cpu(batch_size, xpu_host, doCacheAlloc);
-                vector<T *, Gpu> b_cpu(batch_size, xpu_host, doCacheAlloc);
-                vector<T *, Gpu> c_cpu(batch_size, xpu_host, doCacheAlloc);
-                auto a_cpu_ptr = a_cpu.data();
-                auto b_cpu_ptr = b_cpu.data();
-                auto c_cpu_ptr = c_cpu.data();
-                launchHostKernel(
-                    [=] {
-                        for (int i = 0; i < batch_size; ++i)
-                            abc(i, &a_cpu_ptr[i], &b_cpu_ptr[i], &c_cpu_ptr[i]);
-                    },
-                    xpu_host);
-                auto a_xpu = makeSure(a_cpu, xpu, doCacheAlloc);
-                auto b_xpu = makeSure(b_cpu, xpu, doCacheAlloc);
-                auto c_xpu = makeSure(c_cpu, xpu, doCacheAlloc);
+                vector<T *, Cpu> a_cpu(batch_size, Cpu{}, doCacheAlloc);
+                vector<T *, Cpu> b_cpu(batch_size, Cpu{}, doCacheAlloc);
+                vector<T *, Cpu> c_cpu(batch_size, Cpu{}, doCacheAlloc);
+                for (int i = 0; i < batch_size; ++i) abc(i, &a_cpu[i], &b_cpu[i], &c_cpu[i]);
+                auto a_xpu = makeSure(a_cpu, xpu, doCacheAlloc, true);
+                auto b_xpu = makeSure(b_cpu, xpu, doCacheAlloc, true);
+                auto c_xpu = makeSure(c_cpu, xpu, doCacheAlloc, true);
                 xgemm_batch<T>(transa, transb, m, n, k, alpha, (const T **)a_xpu.data(), lda,
                                (const T **)b_xpu.data(), ldb, beta, c_xpu.data(), ldc, batch_size,
                                xpu);
+                sync(xpu);
             }
         }
 
@@ -708,26 +891,21 @@ namespace superbblas {
             }
 
             auto cT = toCudaDataType<T>();
-            bool ca = (transa == 'c' || transa == 'C');
-            bool cb = (transb == 'c' || transb == 'C');
+            bool ca = (transa == 'c' || transa == 'C') && is_complex<T>::value;
+            bool cb = (transb == 'c' || transb == 'C') && is_complex<T>::value;
             bool ta = (transa != 'n' && transa != 'N');
             bool tb = (transb != 'n' && transb != 'N');
 
-            const int update_max_rows = 1024 * 1024 * 8;
-            if (n > 1 &&
-                ((n <= 16 && k >= 100000) || (m > update_max_rows && n < 256 && k < 256)) && !cb) {
-                for (int j = 0; j < n; ++j)
-                    xgemm_batch_strided(transa, transb, m, 1, k, alpha, a, lda, stridea,
-                                        b + j * (!tb ? ldb : 1), ldb, strideb, beta, c + j * ldc,
-                                        ldc, stridec, batch_size, xpu);
-            } else if (m > 1 && m <= 16 && n > 1 && n <= 16 && k >= 100000 &&
-                       ((!ta && !tb) || (!ta && tb))) {
-                for (int i = 0; i < m; ++i)
-                    for (int j = 0; j < n; ++j)
-                        xgemm_batch_strided(transa, transb, 1, 1, k, alpha, a + i * (!ta ? 1 : lda),
-                                            lda, stridea, b + j * (!tb ? ldb : 1), ldb, strideb,
-                                            beta, c + i + j * ldc, ldc, stridec, batch_size, xpu);
-            } else if (batch_size == 1) {
+            // Shortcut for inner products
+#    ifdef SUPERBBLAS_USE_CUDA
+            if (m == 1 && n == 1) {
+                inner_prod_gpu(k, batch_size, alpha, a, !ta ? lda : 1, stridea, ca, b,
+                               !tb ? 1 : ldb, strideb, cb, beta, c, stridec, xpu);
+                return;
+            }
+#    endif // SUPERBBLAS_USE_CUDA
+
+            if (batch_size == 1) {
 #    ifdef SUPERBBLAS_USE_CUDA
                 if (m == 1 && n == 1 && ((!ca && !cb) || ca != cb)) {
                     vector<T, Gpu> v;
@@ -791,52 +969,52 @@ namespace superbblas {
                         rocblas_gemm_algo_standard, 0, rocblas_gemm_flags_none));
                 }
 #    endif
-            } else {
+           } else {
 #    ifdef SUPERBBLAS_USE_CUDA
-                gpuBlasCheck(SUPERBBLAS_GPUBLAS_SYMBOL(GemmStridedBatchedEx)(
-                    getGpuBlasHandle(xpu), toCublasTrans(transa), toCublasTrans(transb), m, n, k,
-                    &alpha, a, cT, lda, stridea, b, cT, ldb, strideb, &beta, c, cT, ldc, stridec,
-                    batch_size, toCudaComputeType<T>(), CUBLAS_GEMM_DEFAULT));
+               gpuBlasCheck(SUPERBBLAS_GPUBLAS_SYMBOL(GemmStridedBatchedEx)(
+                   getGpuBlasHandle(xpu), toCublasTrans(transa), toCublasTrans(transb), m, n, k,
+                   &alpha, a, cT, lda, stridea, b, cT, ldb, strideb, &beta, c, cT, ldc, stridec,
+                   batch_size, toCudaComputeType<T>(), CUBLAS_GEMM_DEFAULT));
 #    else
-                if (m == 1 && n == 1 && stridec == 1 && ((!ca && !cb) || ca != cb)) {
-                    vector<T, Gpu> v;
-                    T *r = c;
-                    if (std::norm(beta) != 0) {
-                        v = vector<T, Gpu>(m * n * batch_size, xpu, doCacheAlloc);
-                        r = v.data();
-                        xscal(batch_size, beta, c, 1, xpu);
-                    }
-                    if (!ca && !cb)
-                        gpuBlasCheck(rocblas_dot_strided_batched_ex(
-                            getGpuBlasHandle(xpu), k, a, cT, !ta ? lda : 1, stridea, b, cT,
-                            !tb ? 1 : ldb, strideb, batch_size, r, cT, cT));
-                    else if (ca && !cb)
-                        gpuBlasCheck(rocblas_dotc_strided_batched_ex(
-                            getGpuBlasHandle(xpu), k, a, cT, !ta ? lda : 1, stridea, b, cT,
-                            !tb ? 1 : ldb, strideb, batch_size, r, cT, cT));
-                    else if (!ca && cb)
-                        gpuBlasCheck(rocblas_dotc_strided_batched_ex(
-                            getGpuBlasHandle(xpu), k, b, cT, !tb ? 1 : ldb, strideb, a, cT,
-                            !ta ? lda : 1, stridea, batch_size, r, cT, cT));
-                    if (std::norm(beta) != 0)
-                        copy_n(alpha, r, xpu, batch_size, c, xpu, EWOp::Add{});
-                    else if (alpha != T{1})
-                        xscal(batch_size, alpha, c, 1, xpu);
-                } else if (n == 1 && !cb) {
-                    int mA = !ta ? m : k;
-                    int nA = !ta ? k : m;
-                    int incb = !tb ? 1 : ldb;
-                    xgemv_batched_strided(transa, mA, nA, alpha, a, lda, stridea, b, incb, strideb,
-                                          beta, c, 1, stridec, batch_size, xpu);
-                } else {
-                    gpuBlasCheck(rocblas_gemm_strided_batched_ex(
+               if (m == 1 && n == 1 && stridec == 1 && ((!ca && !cb) || ca != cb)) {
+                   vector<T, Gpu> v;
+                   T *r = c;
+                   if (std::norm(beta) != 0) {
+                       v = vector<T, Gpu>(m * n * batch_size, xpu, doCacheAlloc);
+                       r = v.data();
+                       xscal(batch_size, beta, c, 1, xpu);
+                   }
+                   if (!ca && !cb)
+                       gpuBlasCheck(rocblas_dot_strided_batched_ex(
+                           getGpuBlasHandle(xpu), k, a, cT, !ta ? lda : 1, stridea, b, cT,
+                           !tb ? 1 : ldb, strideb, batch_size, r, cT, cT));
+                   else if (ca && !cb)
+                       gpuBlasCheck(rocblas_dotc_strided_batched_ex(
+                           getGpuBlasHandle(xpu), k, a, cT, !ta ? lda : 1, stridea, b, cT,
+                           !tb ? 1 : ldb, strideb, batch_size, r, cT, cT));
+                   else if (!ca && cb)
+                       gpuBlasCheck(rocblas_dotc_strided_batched_ex(
+                           getGpuBlasHandle(xpu), k, b, cT, !tb ? 1 : ldb, strideb, a, cT,
+                           !ta ? lda : 1, stridea, batch_size, r, cT, cT));
+                   if (std::norm(beta) != 0)
+                       copy_n(alpha, r, xpu, batch_size, c, xpu, EWOp::Add{});
+                   else if (alpha != T{1})
+                       xscal(batch_size, alpha, c, 1, xpu);
+               } else if (n == 1 && !cb) {
+                   int mA = !ta ? m : k;
+                   int nA = !ta ? k : m;
+                   int incb = !tb ? 1 : ldb;
+                   xgemv_batched_strided(transa, mA, nA, alpha, a, lda, stridea, b, incb, strideb,
+                                         beta, c, 1, stridec, batch_size, xpu);
+               } else {
+                   gpuBlasCheck(rocblas_gemm_strided_batched_ex(
                         getGpuBlasHandle(xpu), toCublasTrans(transa), toCublasTrans(transb), m, n,
                         k, &alpha, a, cT, lda, stridea, b, cT, ldb, strideb, &beta, c, cT, ldc,
                         stridec, c, cT, ldc, stridec, batch_size, cT, rocblas_gemm_algo_standard, 0,
-                        rocblas_gemm_flags_none));
-                }
+                       rocblas_gemm_flags_none));
+               }
 #    endif
-            }
+           }
         }
 #endif // SUPERBBLAS_USE_GPU
 
@@ -848,7 +1026,7 @@ namespace superbblas {
 
         template <typename T, typename XPU>
         vector<T, XPU> makeSure(const vector<T, XPU> &v, XPU xpu,
-                                CacheAlloc cacheAlloc = dontCacheAlloc) {
+                                CacheAlloc cacheAlloc = dontCacheAlloc, bool = false) {
             if (deviceId(v.ctx()) == deviceId(xpu)) {
                 causalConnectTo(v.ctx(), xpu);
                 return v;
@@ -867,7 +1045,33 @@ namespace superbblas {
         template <typename T, typename XPU1, typename XPU0,
                   typename std::enable_if<!std::is_same<XPU0, XPU1>::value, bool>::type = true>
         vector<T, XPU1> makeSure(const vector<T, XPU0> &v, XPU1 xpu1,
-                                 CacheAlloc cacheAlloc = dontCacheAlloc) {
+                                 CacheAlloc cacheAlloc = dontCacheAlloc, bool doAsync = false) {
+            if (std::is_same<XPU0, Cpu>::value && doAsync) {
+                // Shortcut for async copying from cpu to gpu
+                const auto &host = xpu1.toCpuPinned();
+                vector<T, XPU1> v_host(v.size(), host, cacheAlloc);
+                const T *vp = v.data();
+                T *v_hostp = v_host.data();
+                const auto n = v.size();
+                bool *flag_done = new bool(false);
+                launchHostKernel([=] { std::memcpy(v_hostp, vp, n * sizeof(T)); }, host);
+                vector<T, XPU1> r_dummy(v.size(), xpu1, cacheAlloc);
+                const auto alloc = r_dummy.ptr;
+                const auto v_copy = v;
+                auto new_alloc =
+                    std::shared_ptr<char>(alloc.get(), [alloc, v_copy, v_host, xpu1, flag_done](char *) {
+                        static_assert(!std::is_reference<decltype(alloc)>::value, "wtf");
+                        static_assert(!std::is_reference<decltype(v_copy)>::value, "wtf");
+                        static_assert(!std::is_reference<decltype(v_host)>::value, "wtf");
+                        static_assert(!std::is_reference<decltype(xpu1)>::value, "wtf");
+                        if (!*flag_done) sync(xpu1);
+                        delete flag_done;
+                    });
+                vector<T, XPU1> r(r_dummy.n, r_dummy.ptr_aligned, new_alloc, xpu1);
+                copy_n(v_host.data(), v_host.ctx(), v_host.size(), r.data(), r.ctx());
+                launchHostKernel([=] { *flag_done = true; }, host);
+                return r;
+            }
             vector<T, XPU1> r(v.size(), xpu1, cacheAlloc);
             copy_n(v.data(), v.ctx(), v.size(), r.data(), r.ctx());
             return r;
@@ -892,28 +1096,37 @@ namespace superbblas {
         template <typename T>
         DECL_SUM_T(T sum(const vector<T, Gpu> &v))
         IMPL({
-            setDevice(v.ctx());
-            auto it = encapsulate_pointer(v.begin());
-            return thrust::reduce(thrust_par_on(v.ctx()), it, it + v.size());
+            if (deviceId(v.ctx()) == CPU_DEVICE_ID) {
+                sync(v.ctx());
+                T s{0};
+                const T *p = v.data();
+                for (std::size_t i = 0, n = v.size(); i < n; ++i) s += p[i];
+                return s;
+            } else {
+                setDevice(v.ctx());
+                auto it = encapsulate_pointer(v.begin());
+                return thrust::reduce(thrust_par_on(v.ctx()), it, it + v.size());
+            }
         })
 #endif
 
-        /// Return a new array with only the elements w[i] that mask[v[i]] != 0
+        /// Return a new array with only the elements w[i] that m[disp+v[i]] != 0
         /// \param v: vector of indices used by the mask
-        /// \param mask: vector of size v[v.size()-1]
+        /// \param m: vector of size v[disp+v.size()-1]
+        /// \param disp: displacement on m
         /// \param w: vector of indices to return
         /// \return: a new vector
 
         template <typename IndexType, typename T>
-        vector<IndexType, Cpu> select(const vector<IndexType, Cpu> &v, const T *m,
-                                      const vector<IndexType, Cpu> &w) {
+        vector<IndexType, Cpu> select(const vector<IndexType, Cpu> &v, const vector<T, Cpu> &m,
+                                      IndexType disp, const vector<IndexType, Cpu> &w) {
             vector<IndexType, Cpu> r{w.size(), Cpu{}};
             const IndexType *pv = v.data();
             const IndexType *pw = w.data();
             IndexType *pr = r.data();
             std::size_t n = w.size(), nr = 0;
             for (std::size_t i = 0; i < n; ++i)
-                if (m[pv[i]] != 0) pr[nr++] = pw[i];
+                if (m[disp + pv[i]] != T{0}) pr[nr++] = pw[i];
             r.resize(nr);
             return r;
         }
@@ -927,28 +1140,45 @@ namespace superbblas {
         };
 #    endif
 
-        /// Return a new array with only the elements w[i] that mask[v[i]] != 0
+        /// Return a new array with only the elements w[i] that m[disp+v[i]] != 0
         /// \param v: vector of indices used by the mask
-        /// \param mask: vector of size v[v.size()-1]
+        /// \param m: vector of size v[disp+v.size()-1]
+        /// \param disp: displacement on m
         /// \param w: vector of indices to return
         /// \return: a new vector
 
+
         template <typename IndexType, typename T>
-        DECL_SELECT_T(vector<IndexType, Gpu> select(const vector<IndexType, Gpu> &v, T *m,
+        DECL_SELECT_T(vector<IndexType, Gpu> select(const vector<IndexType, Gpu> &v,
+                                                    const vector<T, Gpu> &m, IndexType disp,
                                                     const vector<IndexType, Gpu> &w))
         IMPL({
-            causalConnectTo(w.ctx(), v.ctx());
+            auto m0 = makeSure(m, v.ctx());
+            auto w0 = makeSure(w, v.ctx());
             setDevice(v.ctx());
-            vector<IndexType, Gpu> r{w.size(), v.ctx()};
-            auto itv = encapsulate_pointer(v.begin());
-            auto itm = encapsulate_pointer(m);
-            auto itw = encapsulate_pointer(w.begin());
-            auto itr = encapsulate_pointer(r.begin());
-            auto itmv = thrust::make_permutation_iterator(itm, itv);
-            auto itr_end = thrust::copy_if(thrust_par_on(v.ctx()), itw, itw + w.size(), itmv, itr,
-                                           not_zero<T>{});
-            r.resize(itr_end - itr);
-            causalConnectTo(v.ctx(), w.ctx());
+            vector<IndexType, Gpu> r{w0.size(), v.ctx()};
+            if (deviceId(v.ctx()) == CPU_DEVICE_ID) {
+                sync(v.ctx());
+                const IndexType *pv = v.data();
+                const IndexType *pw = w0.data();
+                const T *pm = m0.data();
+                IndexType *pr = r.data();
+                std::size_t n = w0.size(), nr = 0;
+                for (std::size_t i = 0; i < n; ++i)
+                    if (pm[disp + pv[i]] != T{0}) pr[nr++] = pw[i];
+                r.resize(nr);
+            } else {
+                auto itv = encapsulate_pointer(v.begin());
+                auto itm = encapsulate_pointer(m0.begin());
+                auto itw = encapsulate_pointer(w0.begin());
+                auto itr = encapsulate_pointer(r.begin());
+                auto itmv = thrust::make_permutation_iterator(itm + disp, itv);
+                auto itr_end = thrust::copy_if(thrust_par_on(v.ctx()), itw, itw + w.size(), itmv,
+                                               itr, not_zero<T>{});
+                r.resize(itr_end - itr);
+            }
+            causalConnectTo(v.ctx(), w0.ctx());
+            causalConnectTo(v.ctx(), m0.ctx());
             return r;
         })
 #endif // SUPERBBLAS_USE_GPU
@@ -988,10 +1218,20 @@ namespace superbblas {
         template <typename T, typename std::enable_if<is_complex<T>::value, bool>::type = false>
         DECL_CONJ_T(void conj(vector<T, Gpu> &v))
         IMPL({
-            setDevice(v.ctx());
-            auto itv = encapsulate_pointer(v.begin());
-            thrust::transform(thrust_par_on(v.ctx()), itv, itv + v.size(), itv,
-                              thrust_conj<typename cuda_complex<T>::type>{});
+            if (deviceId(v.ctx()) == CPU_DEVICE_ID) {
+                auto *p = v.data();
+                std::size_t n = v.size();
+                launchHostKernel(
+                    [=] {
+                        for (std::size_t i = 0; i < n; ++i) p[i] = std::conj(p[i]);
+                    },
+                    v.ctx());
+            } else {
+                setDevice(v.ctx());
+                auto itv = encapsulate_pointer(v.begin());
+                thrust::transform(thrust_par_on(v.ctx()), itv, itv + v.size(), itv,
+                                  thrust_conj<typename cuda_complex<T>::type>{});
+            }
         })
 #endif // SUPERBBLAS_USE_GPU
 

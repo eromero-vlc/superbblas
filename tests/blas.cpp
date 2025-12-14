@@ -15,12 +15,25 @@ template <typename T, typename XPU> struct gen_dummy_vector {
         copy_n<IndexType>(T{1}, v.data(), Cpu{}, size, r.data(), cuda, EWOp::Copy{});
         return r;
     }
+
+    static vector<T, XPU> get(std::size_t size, XPU cuda, unsigned int mod) {
+        vector<T, Cpu> v = gen_dummy_vector<T, Cpu>::get(size, Cpu{}, mod);
+        vector<T, XPU> r(size, cuda);
+        copy_n<IndexType>(T{1}, v.data(), Cpu{}, size, r.data(), cuda, EWOp::Copy{});
+        return r;
+    }
 };
 
 template <typename T> struct gen_dummy_vector<T, Cpu> {
     static vector<T, Cpu> get(std::size_t size, Cpu cpu) {
         vector<T, Cpu> v(size, cpu);
         for (unsigned int i = 0; i < size; i++) v[i] = i;
+        return v;
+    }
+
+    static vector<T, Cpu> get(std::size_t size, Cpu cpu, unsigned int mod) {
+        vector<T, Cpu> v(size, cpu);
+        for (unsigned int i = 0; i < size; i++) v[i] = i % mod;
         return v;
     }
 };
@@ -384,6 +397,37 @@ void test_copy_blocking(std::size_t size, XPU xpu, EWOP, unsigned int nrep = 10)
     test_copy_blocking<T>(size, xpu, EWOP{}, T{0}, nrep);
 }
 
+template <typename T, typename XPU>
+void test_select(std::size_t size, XPU xpu, unsigned int nrep = 10) {
+
+    // Normalize size
+    size /= (sizeof(T) / sizeof(float));
+    size = size / 4 * 4;
+
+    // Do once the operation for testing correctness
+    vector<T, Cpu> t0 = gen_dummy_vector<T, Cpu>::get(size, Cpu{}, 2);
+    Indices<Cpu> t1 = gen_dummy_perm(size, size, Cpu{});
+    vector<T, XPU> t0_xpu = gen_dummy_vector<T, XPU>::get(size, xpu, 2);
+    Indices<XPU> t1_xpu = gen_dummy_perm(size, size, xpu);
+    auto t2 = superbblas::detail::select<IndexType, T>(t1, t0, 0, t1);
+    auto t2_xpu = superbblas::detail::select<IndexType, T>(t1_xpu, t0_xpu, 0, t1_xpu);
+    check_are_equal(t2, t2_xpu);
+
+    sync(xpu);
+    double t = w_time();
+    for (unsigned int rep = 0; rep < nrep; ++rep) {
+        superbblas::detail::select<IndexType, T>(t1_xpu, t0_xpu, 0, t1_xpu);
+    }
+    sync(xpu);
+    double t_xpu_xpu = (w_time() - t) / nrep;
+
+    const char *sep = "    ";
+    std::cout << "select: " << toStr<T>::get << " for " << toStr<XPU>::get << " in "
+              << " (" << sizeof(T) * size / 1024. / 1024 << " MiB) " << sep
+              << (sizeof(T) + sizeof(IndexType) / 2) * size / t_xpu_xpu / 1024 / 1024 / 1024
+              << " GiB/s" << std::endl;
+}
+
 int main(int argc, char **argv) {
     int size = 1000;
     int nrep = 10;
@@ -427,6 +471,7 @@ int main(int argc, char **argv) {
         test_copy<std::complex<float>, Cpu>(size, ctx.toCpu(0), EWOp::Add{}, nrep);
         test_copy<std::complex<double>, Cpu>(size, ctx.toCpu(0), EWOp::Copy{}, nrep);
         test_copy<std::complex<double>, Cpu>(size, ctx.toCpu(0), EWOp::Add{}, nrep);
+        test_select<float, Cpu>(size, ctx.toCpu(0), nrep);
         clearCaches();
         checkForMemoryLeaks(std::cout);
     }
@@ -443,6 +488,7 @@ int main(int argc, char **argv) {
         test_copy<std::complex<float>, Gpu>(size, ctx.toGpu(0), EWOp::Add{}, nrep);
         test_copy<std::complex<double>, Gpu>(size, ctx.toGpu(0), EWOp::Copy{}, nrep);
         test_copy<std::complex<double>, Gpu>(size, ctx.toGpu(0), EWOp::Add{}, nrep);
+        test_select<float, Gpu>(size, ctx.toGpu(0), nrep);
         reportTimings(std::cout);
         clearCaches();
         checkForMemoryLeaks(std::cout);
