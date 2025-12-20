@@ -1336,17 +1336,6 @@ namespace superbblas {
                   const Components_tmpl<Nd1, Q, XPU0, XPU1> &v1, EWOP, CoorOrder co,
                   const Comm &comm) {
 
-            // Check that common arguments have the same value in all processes
-            if (getDebugLevel() > 0) {
-                for (const auto &i : v1.first) sync(i.it.ctx());
-                for (const auto &i : v1.second) sync(i.it.ctx());
-                struct tag_type {}; // For hashing template arguments
-                check_consistency(std::make_tuple(std::string("load"), alpha, from0, size0, o0, p1,
-                                                  from1, dim1, o1, typeid(EWOP).hash_code(), co,
-                                                  typeid(tag_type).hash_code()),
-                                  comm);
-            }
-
             tracker<XPU1> _t("load", Cpu{});
 
             // Turn o0, from0, and size0 into SlowToFast
@@ -2305,21 +2294,32 @@ namespace superbblas {
         detail::Storage_context<Nd0, detail::MpiComm> &sto =
             *detail::get_storage_context<Nd0, T, detail::MpiComm>(stoh);
         detail::MpiComm comm = detail::get_comm(mpicomm);
+        const auto &o0_array = detail::toArray<Nd0>(o0, "o0");
+        const auto &o1_array = detail::toArray<Nd1>(o1, "o1");
+        const auto &p1_proc_ranges = detail::get_from_size(p1, ncomponents1 * comm.nprocs, comm);
+        const auto &v1_c =
+            detail::get_components<Nd1>(v1, nullptr, ctx1, ncomponents1, p1, comm, session);
+
+        // Check that common arguments have the same value in all processes
+        if (getDebugLevel() > 0) {
+            for (const auto &i : v1_c.first) detail::sync(i.it.ctx());
+            for (const auto &i : v1_c.second) detail::sync(i.it.ctx());
+            struct tag_type {}; // For hashing template arguments
+            detail::check_consistency(std::make_tuple(std::string("load"), alpha, from0, size0,
+                                                      o0_array, p1_proc_ranges, from1, dim1,
+                                                      o1_array, copyadd, co,
+                                                      typeid(tag_type).hash_code()),
+                                      comm);
+        }
 
         if (copyadd == Copy)
-            detail::load<Nd0, Nd1, T, Q>(
-                alpha, sto, from0, size0, detail::toArray<Nd0>(o0, "o0"),
-                detail::get_from_size(p1, ncomponents1 * comm.nprocs, comm)[comm.rank], from1, dim1,
-                detail::toArray<Nd1>(o1, "o1"),
-                detail::get_components<Nd1>(v1, nullptr, ctx1, ncomponents1, p1, comm, session),
-                detail::EWOp::Copy{}, co, comm);
+            detail::load<Nd0, Nd1, T, Q>(alpha, sto, from0, size0, o0_array,
+                                         p1_proc_ranges.at(comm.rank), from1, dim1, o1_array, v1_c,
+                                         detail::EWOp::Copy{}, co, comm);
         else
-            detail::load<Nd0, Nd1, T, Q>(
-                alpha, sto, from0, size0, detail::toArray<Nd0>(o0, "o0"),
-                detail::get_from_size(p1, ncomponents1 * comm.nprocs, comm)[comm.rank], from1, dim1,
-                detail::toArray<Nd1>(o1, "o1"),
-                detail::get_components<Nd1>(v1, nullptr, ctx1, ncomponents1, p1, comm, session),
-                detail::EWOp::Add{}, co, comm);
+            detail::load<Nd0, Nd1, T, Q>(alpha, sto, from0, size0, o0_array,
+                                         p1_proc_ranges.at(comm.rank), from1, dim1, o1_array, v1_c,
+                                         detail::EWOp::Add{}, co, comm);
     }
 
     /// Return the nonzero blocks stored
