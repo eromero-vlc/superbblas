@@ -857,7 +857,7 @@ namespace superbblas {
                     if (spFormat == FORMAT_BSR) {
                         implementation_ = "cusparse_bsr";
                         allowLayout = ColumnMajorForY;
-                        preferredLayout = !is_kron ? RowMajor : ColumnMajor;
+                        preferredLayout = ColumnMajor;
                         descrA_bsr = std::shared_ptr<cusparseMatDescr_t>(
                             new cusparseMatDescr_t, [](cusparseMatDescr_t *p) {
                                 cusparseDestroyMatDescr(*p);
