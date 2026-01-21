@@ -212,25 +212,27 @@ namespace superbblas {
             Components<Nd, T> r;
             for (unsigned int i = 0; i < ncomponents; ++i) {
                 MaskType *maski = mask ? (MaskType *)mask[i] : (MaskType *)nullptr;
+                const auto vol_fsi = volume(fs[i][1]);
+                const auto &fsi1 = vol_fsi > 0 ? fs[i][1] : Coor<Nd>{{}};
                 switch (ctx[i].plat) {
 #ifdef SUPERBBLAS_USE_GPU
                 case CPU:
-                    r.second.push_back(Component<Nd, T, Cpu>{
-                        to_vector(v[i], volume(fs[i][1]), ctx[i].toCpu(session)), fs[i][1], i,
-                        to_vector(maski, volume(fs[i][1]), ctx[i].toCpu(session))});
+                    r.second.push_back(
+                        Component<Nd, T, Cpu>{to_vector(v[i], vol_fsi, ctx[i].toCpu(session)), fsi1,
+                                              i, to_vector(maski, vol_fsi, ctx[i].toCpu(session))});
                     assert(!v[i] || getPtrDevice(v[i]) == CPU_DEVICE_ID);
                     break;
                 case GPU:
-                    r.first.push_back(Component<Nd, T, Gpu>{
-                        to_vector(v[i], volume(fs[i][1]), ctx[i].toGpu(session)), fs[i][1], i,
-                        to_vector(maski, volume(fs[i][1]), ctx[i].toGpu(session))});
+                    r.first.push_back(
+                        Component<Nd, T, Gpu>{to_vector(v[i], vol_fsi, ctx[i].toGpu(session)), fsi1,
+                                              i, to_vector(maski, vol_fsi, ctx[i].toGpu(session))});
                     assert(!v[i] || getPtrDevice(v[i]) == ctx[i].device);
                     break;
 #else // SUPERBBLAS_USE_GPU
                 case CPU:
-                    r.first.push_back(Component<Nd, T, Cpu>{
-                        to_vector(v[i], volume(fs[i][1]), ctx[i].toCpu(session)), fs[i][1], i,
-                        to_vector(maski, volume(fs[i][1]), ctx[i].toCpu(session))});
+                    r.first.push_back(
+                        Component<Nd, T, Cpu>{to_vector(v[i], vol_fsi, ctx[i].toCpu(session)), fsi1,
+                                              i, to_vector(maski, vol_fsi, ctx[i].toCpu(session))});
                     assert(!v[i] || getPtrDevice(v[i]) == CPU_DEVICE_ID);
                     break;
 #endif
@@ -3470,7 +3472,8 @@ namespace superbblas {
             Proc_ranges<Nd> r(comm.nprocs);
             unsigned int ncomponents = n / comm.nprocs;
             for (unsigned int i = 0; i < comm.nprocs; ++i) r[i].resize(ncomponents);
-            for (unsigned int i = 0; i < n; ++i) r[i / ncomponents][i % ncomponents] = p[i];
+            for (unsigned int i = 0; i < n; ++i)
+                if (volume(p[i][1]) > 0) r[i / ncomponents][i % ncomponents] = p[i];
             return r;
         }
     }

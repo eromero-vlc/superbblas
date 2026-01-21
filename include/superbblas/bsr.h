@@ -1946,7 +1946,7 @@ namespace superbblas {
             // Find all common labels in ox to oy
             Order<Nx> oC;
             std::size_t nC = 0;
-            volC = 1;
+            volC = (volume(dimx) * volume(dimy) == 0 ? 0 : 1);
             enum { None, ContractWithDomain, ContractWithImage } kindx = None, kindy = None;
             bool powerFoundOnx = false;
             for (std::size_t i = 0; i < nx; ++i) {
@@ -1973,7 +1973,7 @@ namespace superbblas {
                 } else if (std::find(oy.begin(), oy.end(), c) != oy.end()) {
                     oC[nC++] = c;
                     volC *= dimx[i];
-                } else {
+                } else if (dimx[i] > 1) {
                     throw std::runtime_error(
                         "Dimension label for the dense input vector doesn't match the "
                         "input sparse dimensions nor the dense output dimensions");
@@ -2007,7 +2007,7 @@ namespace superbblas {
                     power = dimy[i];
                 } else if (std::find(ox.begin(), ox.end(), c) != ox.end()) {
                     // Do nothing
-                } else {
+                } else if (dimy[i] > 1) {
                     throw std::runtime_error(
                         "Dimension label for the dense input vector doesn't match the "
                         "input sparse dimensions nor the dense output dimensions");
