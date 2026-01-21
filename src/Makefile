@@ -86,7 +86,7 @@ $(LIB_SOURCE_STEM).split: $(LIB_SOURCE_STEM)
 		( \
 			echo "// This file is generated automatically. Please, do not modify"; \
 			echo "#include \"superbblas.h\""; \
-			echo "using namespace superbblas; using namespace detail;";  \
+			echo "using namespace superbblas; using namespace superbblas::detail;";  \
 			cat $$i \
 		) > $${i}.cpp; \
 	done
