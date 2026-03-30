@@ -619,7 +619,7 @@ namespace superbblas {
                 const IndexType xs = lx == ColumnMajor ? 1 : ldx;
                 if (v.kron_it.size() == 0) {
                     if (ncols > 1) {
-#    ifdef _OPENMP
+#    if SUPERBBLAS_USE_OPENMP_WITH_BLAS
 #        pragma omp parallel for schedule(static)
 #    endif
                         for (IndexType i = 0; i < block_rows; ++i) {
@@ -636,7 +636,7 @@ namespace superbblas {
                             }
                         }
                     } else {
-#    ifdef _OPENMP
+#    if SUPERBBLAS_USE_OPENMP_WITH_BLAS
 #        pragma omp parallel for schedule(static)
 #    endif
                         for (IndexType i = 0; i < block_rows; ++i) {
@@ -656,7 +656,7 @@ namespace superbblas {
 #    endif
                         {
                             std::vector<T> aux(ki * ncols * bd);
-#    ifdef _OPENMP
+#    if SUPERBBLAS_USE_OPENMP_WITH_BLAS
 #        pragma omp for schedule(static)
 #    endif
                             for (IndexType i = 0; i < block_rows; ++i) {
@@ -678,7 +678,7 @@ namespace superbblas {
                         // Contract with the blocking: (bd,rows,n,kd) x (ki,kd)[mu] -> (bd,rows,n,ki,mu) ; note (fast,slow)
                         vector<T, Cpu> aux(bd * block_cols * ncols * ki * num_nnz_per_row, Cpu{});
                         zero_n(aux.data(), aux.size(), aux.ctx());
-#    ifdef _OPENMP
+#    if SUPERBBLAS_USE_OPENMP_WITH_BLAS
 #        pragma omp parallel for schedule(static)
 #    endif
                         for (unsigned int i = 0; i < num_nnz_per_row; ++i)
@@ -687,7 +687,7 @@ namespace superbblas {
                                   !tb ? ki : kd, T{0},
                                   aux.data() + bd * block_cols * ncols * ki * i,
                                   bd * block_cols * ncols, Cpu{});
-#    ifdef _OPENMP
+#    if SUPERBBLAS_USE_OPENMP_WITH_BLAS
 #        pragma omp parallel for schedule(static)
 #    endif
                         for (IndexType i = 0; i < block_rows; ++i) {

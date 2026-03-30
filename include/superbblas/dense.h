@@ -63,7 +63,7 @@ namespace superbblas {
             _t.flops = (double)n * n * n / 3 * k * multiplication_cost<T>::value;
             _t.memops = (double)n * n * k * sizeof(T);
 
-#ifdef _OPENMP
+#if SUPERBBLAS_USE_OPENMP_WITH_BLAS
             int num_threads = omp_get_max_threads();
 #else
             int num_threads = 1;
@@ -72,17 +72,17 @@ namespace superbblas {
             T *p = v.data();
             std::vector<int> info(num_threads, 0);
 
-#ifdef _OPENMP
+#if SUPERBBLAS_USE_OPENMP_WITH_BLAS
 #    pragma omp parallel
 #endif
             {
-#ifdef _OPENMP
+#if SUPERBBLAS_USE_OPENMP_WITH_BLAS
                 int id = omp_get_thread_num();
 #else
                 int id = 0;
 #endif
 
-#ifdef _OPENMP
+#if SUPERBBLAS_USE_OPENMP_WITH_BLAS
 #    pragma omp for schedule(static)
 #endif
                 for (std::size_t i = 0; i < k; ++i)
@@ -154,7 +154,7 @@ namespace superbblas {
             const T *ap = a.data();
             T *xp = x.data();
 
-#ifdef _OPENMP
+#if SUPERBBLAS_USE_OPENMP_WITH_BLAS
 #    pragma omp parallel for schedule(static)
 #endif
             for (std::size_t i = 0; i < k; ++i)
@@ -250,7 +250,7 @@ namespace superbblas {
             using BLASINT = std::int64_t;
             T *ap = a.data(), *xp = x.data();
 
-#ifdef _OPENMP
+#if SUPERBBLAS_USE_OPENMP_WITH_BLAS
             int num_threads = omp_get_max_threads();
 #else
             int num_threads = 1;
@@ -258,17 +258,17 @@ namespace superbblas {
             BLASINT *ipivs = new BLASINT[n * num_threads];
             std::vector<int> info(num_threads, 0);
 
-#ifdef _OPENMP
+#if SUPERBBLAS_USE_OPENMP_WITH_BLAS
 #    pragma omp parallel
 #endif
             {
-#ifdef _OPENMP
+#if SUPERBBLAS_USE_OPENMP_WITH_BLAS
                 int id = omp_get_thread_num();
 #else
                 int id = 0;
 #endif
                 BLASINT *ipiv = ipivs + n * id;
-#ifdef _OPENMP
+#if SUPERBBLAS_USE_OPENMP_WITH_BLAS
 #    pragma omp for schedule(static)
 #endif
                 for (std::size_t i = 0; i < k; ++i) {
@@ -358,7 +358,7 @@ namespace superbblas {
             using BLASINT = std::int64_t;
             T *ap = a.data();
 
-#ifdef _OPENMP
+#if SUPERBBLAS_USE_OPENMP_WITH_BLAS
             int num_threads = omp_get_max_threads();
 #else
             int num_threads = 1;
@@ -371,18 +371,18 @@ namespace superbblas {
             BLASINT lwork = std::real(worksize);
             std::vector<T> work(num_threads * lwork);
 
-#ifdef _OPENMP
+#if SUPERBBLAS_USE_OPENMP_WITH_BLAS
 #    pragma omp parallel
 #endif
             {
-#ifdef _OPENMP
+#if SUPERBBLAS_USE_OPENMP_WITH_BLAS
                 int id = omp_get_thread_num();
 #else
                 int id = 0;
 #endif
                 BLASINT *ipiv = ipivs + n * id;
                 T *iwork = work.data() + lwork * id;
-#ifdef _OPENMP
+#if SUPERBBLAS_USE_OPENMP_WITH_BLAS
 #    pragma omp for schedule(static)
 #endif
                 for (std::size_t i = 0; i < k; ++i) {
@@ -473,7 +473,7 @@ namespace superbblas {
 
             tracker<Cpu> _t("local svd (Cpu)", a.ctx());
 
-#ifdef _OPENMP
+#if SUPERBBLAS_USE_OPENMP_WITH_BLAS
             int num_threads = omp_get_max_threads();
 #else
             int num_threads = 1;
@@ -497,18 +497,18 @@ namespace superbblas {
             std::vector<T> rwork(num_threads * lrwork);
             std::vector<int> info(num_threads);
 
-#ifdef _OPENMP
+#if SUPERBBLAS_USE_OPENMP_WITH_BLAS
 #    pragma omp parallel
 #endif
             {
-#ifdef _OPENMP
+#if SUPERBBLAS_USE_OPENMP_WITH_BLAS
                 int id = omp_get_thread_num();
 #else
                 int id = 0;
 #endif
                 T *iwork = work.data() + lwork * id;
                 T *irwork = rwork.data() + lrwork * id;
-#ifdef _OPENMP
+#if SUPERBBLAS_USE_OPENMP_WITH_BLAS
 #    pragma omp for schedule(static)
 #endif
                 for (std::size_t i = 0; i < k; ++i) {

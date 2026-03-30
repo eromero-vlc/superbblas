@@ -14,6 +14,11 @@
 #    define MKL_SCALAR ARITH(, , float, MKL_Complex8, double, MKL_Complex16, , )
 #elif defined(SUPERBBLAS_USE_CBLAS)
 #    include "cblas.h"
+// Detect if openblas is being use and was compiled with support for threads
+#    ifndef SUPERBBLAS_USE_OPENMP_WITH_BLAS
+#        define SUPERBBLAS_USE_OPENMP_WITH_BLAS                                                    \
+            (defined(_OPENMP) && (!defined(OPENBLAS_CONFIG_H) || OPENBLAS_NUM_CORES > 0))
+#    endif
 #endif // SUPERBBLAS_USE_MKL
 
 #ifdef SUPERBBLAS_USE_MKL
@@ -486,7 +491,7 @@ namespace superbblas {
                 int mA = !ta ? m : k;
                 int nA = !ta ? k : m;
                 int incb = !tb ? 1 : ldb;
-#        ifdef _OPENMP
+#        if SUPERBBLAS_USE_OPENMP_WITH_BLAS
 #            pragma omp parallel for schedule(static)
 #        endif
                 for (int i = 0; i < batch_size; ++i) {
@@ -494,7 +499,7 @@ namespace superbblas {
                           c + stridec * i, 1, Cpu{});
                 }
             } else {
-#        ifdef _OPENMP
+#        if SUPERBBLAS_USE_OPENMP_WITH_BLAS
 #            pragma omp parallel for schedule(static)
 #        endif
                 for (int i = 0; i < batch_size; ++i) {
