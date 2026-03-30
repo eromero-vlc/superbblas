@@ -16,8 +16,11 @@
 #    include "cblas.h"
 // Detect if openblas is being use and was compiled with support for threads
 #    ifndef SUPERBBLAS_USE_OPENMP_WITH_BLAS
-#        define SUPERBBLAS_USE_OPENMP_WITH_BLAS                                                    \
-            (defined(_OPENMP) && (!defined(OPENBLAS_CONFIG_H) || OPENBLAS_NUM_CORES > 0))
+#        if defined(_OPENMP) && (!defined(OPENBLAS_CONFIG_H) || OPENBLAS_NUM_CORES > 0)
+#            define SUPERBBLAS_USE_OPENMP_WITH_BLAS 1
+#        else
+#            define SUPERBBLAS_USE_OPENMP_WITH_BLAS 0
+#        endif
 #    endif
 #endif // SUPERBBLAS_USE_MKL
 
