@@ -2264,8 +2264,8 @@ namespace superbblas {
         detail::MpiComm comm = detail::get_comm(mpicomm);
 
         detail::save<Nd0, Nd1, T, Q>(
-            alpha, detail::get_from_size(p0, ncomponents0 * comm.nprocs, comm), from0, size0, dim0,
-            detail::toArray<Nd0>(o0, "o0"),
+            alpha, detail::get_from_size(p0, ncomponents0 * comm.nprocs, comm, dim0), from0, size0,
+            dim0, detail::toArray<Nd0>(o0, "o0"),
             detail::get_components<Nd0>(v0, nullptr, ctx0, ncomponents0, p0, comm, session),
             detail::toArray<Nd1>(o1, "o1"), sto, from1, co, comm);
     }
@@ -2296,7 +2296,8 @@ namespace superbblas {
         detail::MpiComm comm = detail::get_comm(mpicomm);
         const auto &o0_array = detail::toArray<Nd0>(o0, "o0");
         const auto &o1_array = detail::toArray<Nd1>(o1, "o1");
-        const auto &p1_proc_ranges = detail::get_from_size(p1, ncomponents1 * comm.nprocs, comm);
+        const auto &p1_proc_ranges =
+            detail::get_from_size(p1, ncomponents1 * comm.nprocs, comm, dim1);
         const auto &v1_c =
             detail::get_components<Nd1>(v1, nullptr, ctx1, ncomponents1, p1, comm, session);
 
@@ -2554,8 +2555,8 @@ namespace superbblas {
         detail::SelfComm comm = detail::get_comm();
 
         detail::save<Nd0, Nd1, T, Q>(
-            alpha, detail::get_from_size(p0, ncomponents0 * comm.nprocs, comm), from0, size0, dim0,
-            detail::toArray<Nd0>(o0, "o0"),
+            alpha, detail::get_from_size(p0, ncomponents0 * comm.nprocs, comm, dim0), from0, size0,
+            dim0, detail::toArray<Nd0>(o0, "o0"),
             detail::get_components<Nd0>(v0, nullptr, ctx0, ncomponents0, p0, comm, session),
             detail::toArray<Nd1>(o1, "o1"), sto, from1, co, comm);
     }
@@ -2588,15 +2589,15 @@ namespace superbblas {
         if (copyadd == Copy)
             detail::load<Nd0, Nd1, T, Q>(
                 alpha, sto, from0, size0, detail::toArray<Nd0>(o0, "o0"),
-                detail::get_from_size(p1, ncomponents1 * comm.nprocs, comm)[comm.rank], from1, dim1,
-                detail::toArray<Nd1>(o1, "o1"),
+                detail::get_from_size(p1, ncomponents1 * comm.nprocs, comm, dim1)[comm.rank], from1,
+                dim1, detail::toArray<Nd1>(o1, "o1"),
                 detail::get_components<Nd1>(v1, nullptr, ctx1, ncomponents1, p1, comm, session),
                 detail::EWOp::Copy{}, co, comm);
         else
             detail::load<Nd0, Nd1, T, Q>(
                 alpha, sto, from0, size0, detail::toArray<Nd0>(o0, "o0"),
-                detail::get_from_size(p1, ncomponents1 * comm.nprocs, comm)[comm.rank], from1, dim1,
-                detail::toArray<Nd1>(o1, "o1"),
+                detail::get_from_size(p1, ncomponents1 * comm.nprocs, comm, dim1)[comm.rank], from1,
+                dim1, detail::toArray<Nd1>(o1, "o1"),
                 detail::get_components<Nd1>(v1, nullptr, ctx1, ncomponents1, p1, comm, session),
                 detail::EWOp::Add{}, co, comm);
     }

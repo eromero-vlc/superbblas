@@ -1349,7 +1349,7 @@ namespace superbblas {
         detail::MpiComm comm = detail::get_comm(mpicomm);
 
         detail::cholesky<N>(
-            detail::get_from_size(p, ncomponents * comm.nprocs, comm), dim, o_,
+            detail::get_from_size(p, ncomponents * comm.nprocs, comm, dim), dim, o_,
             detail::get_components<N>(v, nullptr, ctx, ncomponents, p, comm, session), orows, ocols,
             comm, co);
     }
@@ -1389,11 +1389,12 @@ namespace superbblas {
         detail::MpiComm comm = detail::get_comm(mpicomm);
 
         detail::trsm<Nc, Nx, Ny>(
-            alpha, detail::get_from_size(pc, ncomponentsc * comm.nprocs, comm), dimc, oc_,
+            alpha, detail::get_from_size(pc, ncomponentsc * comm.nprocs, comm, dimc), dimc, oc_,
             detail::get_components<Nc>((T **)vc, nullptr, ctxc, ncomponentsc, pc, comm, session),
-            orows, ocols, detail::get_from_size(px, ncomponentsx * comm.nprocs, comm), dimx, ox_,
+            orows, ocols, detail::get_from_size(px, ncomponentsx * comm.nprocs, comm, dimx), dimx,
+            ox_,
             detail::get_components<Nx>((T **)vx, nullptr, ctxx, ncomponentsx, px, comm, session),
-            detail::get_from_size(py, ncomponentsy * comm.nprocs, comm), dimy, oy_,
+            detail::get_from_size(py, ncomponentsy * comm.nprocs, comm, dimy), dimy, oy_,
             detail::get_components<Ny>(vy, nullptr, ctxy, ncomponentsx, py, comm, session), comm,
             co);
     }
@@ -1433,11 +1434,12 @@ namespace superbblas {
         detail::MpiComm comm = detail::get_comm(mpicomm);
 
         detail::gesm<Nc, Nx, Ny>(
-            alpha, detail::get_from_size(pc, ncomponentsc * comm.nprocs, comm), dimc, oc_,
+            alpha, detail::get_from_size(pc, ncomponentsc * comm.nprocs, comm, dimc), dimc, oc_,
             detail::get_components<Nc>((T **)vc, nullptr, ctxc, ncomponentsc, pc, comm, session),
-            orows, ocols, detail::get_from_size(px, ncomponentsx * comm.nprocs, comm), dimx, ox_,
+            orows, ocols, detail::get_from_size(px, ncomponentsx * comm.nprocs, comm, dimx), dimx,
+            ox_,
             detail::get_components<Nx>((T **)vx, nullptr, ctxx, ncomponentsx, px, comm, session),
-            detail::get_from_size(py, ncomponentsy * comm.nprocs, comm), dimy, oy_,
+            detail::get_from_size(py, ncomponentsy * comm.nprocs, comm, dimy), dimy, oy_,
             detail::get_components<Ny>(vy, nullptr, ctxy, ncomponentsx, py, comm, session), comm,
             co);
     }
@@ -1463,7 +1465,7 @@ namespace superbblas {
         detail::MpiComm comm = detail::get_comm(mpicomm);
 
         detail::inversion<N>(
-            detail::get_from_size(p, ncomponents * comm.nprocs, comm), dim, o_,
+            detail::get_from_size(p, ncomponents * comm.nprocs, comm, dim), dim, o_,
             detail::get_components<N>(v, nullptr, ctx, ncomponents, p, comm, session), orows, ocols,
             comm, co);
     }
@@ -1510,14 +1512,15 @@ namespace superbblas {
         detail::MpiComm comm = detail::get_comm(mpicomm);
 
         detail::svd<Na, Nx, Ns, Ny>(
-            alpha, detail::get_from_size(pa, ncomponentsa * comm.nprocs, comm), dima, oa_,
+            alpha, detail::get_from_size(pa, ncomponentsa * comm.nprocs, comm, dima), dima, oa_,
             detail::get_components<Na>((T **)va, nullptr, ctxa, ncomponentsa, pa, comm, session),
-            orows, ocols, detail::get_from_size(px, ncomponentsx * comm.nprocs, comm), dimx, ox_,
+            orows, ocols, detail::get_from_size(px, ncomponentsx * comm.nprocs, comm, dimx), dimx,
+            ox_,
             detail::get_components<Nx>((T **)vx, nullptr, ctxx, ncomponentsx, px, comm, session),
-            detail::get_from_size(ps, ncomponentss * comm.nprocs, comm), dims, os_,
+            detail::get_from_size(ps, ncomponentss * comm.nprocs, comm, dims), dims, os_,
             detail::get_components<Ns>((typename detail::the_real<T>::type **)vs, nullptr, ctxs,
                                        ncomponentss, ps, comm, session),
-            detail::get_from_size(py, ncomponentsy * comm.nprocs, comm), dimy, oy_,
+            detail::get_from_size(py, ncomponentsy * comm.nprocs, comm, dimy), dimy, oy_,
             detail::get_components<Ny>(vy, nullptr, ctxy, ncomponentsx, py, comm, session), comm,
             co);
     }
@@ -1544,7 +1547,7 @@ namespace superbblas {
         detail::SelfComm comm = detail::get_comm();
 
         detail::cholesky<N>(
-            detail::get_from_size(p, ncomponents * comm.nprocs, comm), dim, o_,
+            detail::get_from_size(p, ncomponents * comm.nprocs, comm, dim), dim, o_,
             detail::get_components<N>(v, nullptr, ctx, ncomponents, p, comm, session), orows, ocols,
             comm, co);
     }
@@ -1584,11 +1587,12 @@ namespace superbblas {
         detail::SelfComm comm = detail::get_comm();
 
         detail::trsm<Nc, Nx, Ny>(
-            alpha, detail::get_from_size(pc, ncomponentsc * comm.nprocs, comm), dimc, oc_,
+            alpha, detail::get_from_size(pc, ncomponentsc * comm.nprocs, comm, dimc), dimc, oc_,
             detail::get_components<Nc>((T **)vc, nullptr, ctxc, ncomponentsc, pc, comm, session),
-            orows, ocols, detail::get_from_size(px, ncomponentsx * comm.nprocs, comm), dimx, ox_,
+            orows, ocols, detail::get_from_size(px, ncomponentsx * comm.nprocs, comm, dimx), dimx,
+            ox_,
             detail::get_components<Nx>((T **)vx, nullptr, ctxx, ncomponentsx, px, comm, session),
-            detail::get_from_size(py, ncomponentsy * comm.nprocs, comm), dimy, oy_,
+            detail::get_from_size(py, ncomponentsy * comm.nprocs, comm, dimy), dimy, oy_,
             detail::get_components<Ny>(vy, nullptr, ctxy, ncomponentsx, py, comm, session), comm,
             co);
     }
@@ -1628,11 +1632,12 @@ namespace superbblas {
         detail::SelfComm comm = detail::get_comm();
 
         detail::gesm<Nc, Nx, Ny>(
-            alpha, detail::get_from_size(pc, ncomponentsc * comm.nprocs, comm), dimc, oc_,
+            alpha, detail::get_from_size(pc, ncomponentsc * comm.nprocs, comm, dimc), dimc, oc_,
             detail::get_components<Nc>((T **)vc, nullptr, ctxc, ncomponentsc, pc, comm, session),
-            orows, ocols, detail::get_from_size(px, ncomponentsx * comm.nprocs, comm), dimx, ox_,
+            orows, ocols, detail::get_from_size(px, ncomponentsx * comm.nprocs, comm, dimx), dimx,
+            ox_,
             detail::get_components<Nx>((T **)vx, nullptr, ctxx, ncomponentsx, px, comm, session),
-            detail::get_from_size(py, ncomponentsy * comm.nprocs, comm), dimy, oy_,
+            detail::get_from_size(py, ncomponentsy * comm.nprocs, comm, dimy), dimy, oy_,
             detail::get_components<Ny>(vy, nullptr, ctxy, ncomponentsx, py, comm, session), comm,
             co);
     }
@@ -1658,7 +1663,7 @@ namespace superbblas {
         detail::SelfComm comm = detail::get_comm();
 
         detail::inversion<N>(
-            detail::get_from_size(p, ncomponents * comm.nprocs, comm), dim, o_,
+            detail::get_from_size(p, ncomponents * comm.nprocs, comm, dim), dim, o_,
             detail::get_components<N>(v, nullptr, ctx, ncomponents, p, comm, session), orows, ocols,
             comm, co);
     }
@@ -1705,14 +1710,15 @@ namespace superbblas {
         detail::SelfComm comm = detail::get_comm();
 
         detail::svd<Na, Nx, Ns, Ny>(
-            alpha, detail::get_from_size(pa, ncomponentsa * comm.nprocs, comm), dima, oa_,
+            alpha, detail::get_from_size(pa, ncomponentsa * comm.nprocs, comm, dima), dima, oa_,
             detail::get_components<Na>((T **)va, nullptr, ctxa, ncomponentsa, pa, comm, session),
-            orows, ocols, detail::get_from_size(px, ncomponentsx * comm.nprocs, comm), dimx, ox_,
+            orows, ocols, detail::get_from_size(px, ncomponentsx * comm.nprocs, comm, dimx), dimx,
+            ox_,
             detail::get_components<Nx>((T **)vx, nullptr, ctxx, ncomponentsx, px, comm, session),
-            detail::get_from_size(ps, ncomponentss * comm.nprocs, comm), dims, os_,
+            detail::get_from_size(ps, ncomponentss * comm.nprocs, comm, dims), dims, os_,
             detail::get_components<Ns>((typename detail::the_real<T>::type **)vs, nullptr, ctxs,
                                        ncomponentss, ps, comm, session),
-            detail::get_from_size(py, ncomponentsy * comm.nprocs, comm), dimy, oy_,
+            detail::get_from_size(py, ncomponentsy * comm.nprocs, comm, dimy), dimy, oy_,
             detail::get_components<Ny>(vy, nullptr, ctxy, ncomponentsx, py, comm, session), comm,
             co);
     }

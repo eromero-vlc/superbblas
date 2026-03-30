@@ -1425,8 +1425,8 @@ namespace superbblas {
             BSRComponents<Nd, Ni, T> r{};
             r.dimd = dimd;
             r.dimi = dimi;
-            r.pd = detail::get_from_size(pd, ncomponents * comm.nprocs, comm);
-            r.pi = detail::get_from_size(pi, ncomponents * comm.nprocs, comm);
+            r.pd = detail::get_from_size(pd, ncomponents * comm.nprocs, comm, dimd);
+            r.pi = detail::get_from_size(pi, ncomponents * comm.nprocs, comm, dimi);
             r.blockd = blockd;
             r.blocki = blocki;
             r.krond = krond;
@@ -2701,12 +2701,14 @@ namespace superbblas {
             detail::get_bsr_components_from_handle<Nd, Ni, T>(bsrh, ctx, ncomponents, comm, co);
 
         Request r = detail::bsr_krylov<Nd, Ni, Nx, Ny, T>(
-            alpha, *bsr, oim_, odm_, detail::get_from_size(px, ncomponents * comm.nprocs, comm),
-            ox_, fromx, sizex, dimx,
+            alpha, *bsr, oim_, odm_,
+            detail::get_from_size(px, ncomponents * comm.nprocs, comm, dimx), ox_, fromx, sizex,
+            dimx,
             detail::get_components<Nx>((T **)vx, nullptr, ctx, ncomponents, px, comm, session),
-            beta, detail::get_from_size(py, ncomponents * comm.nprocs, comm), oy_, fromy, sizey,
-            dimy, okr, detail::get_components<Ny>(vy, nullptr, ctx, ncomponents, py, comm, session),
-            comm, co, just_local);
+            beta, detail::get_from_size(py, ncomponents * comm.nprocs, comm, dimy), oy_, fromy,
+            sizey, dimy, okr,
+            detail::get_components<Ny>(vy, nullptr, ctx, ncomponents, py, comm, session), comm, co,
+            just_local);
 
         if (request)
             *request = r;
@@ -2850,7 +2852,7 @@ namespace superbblas {
     /// \param krondm: domain dimensions of the Kronecker block
     /// \param blockImFast: whether the blocks are stored with the image indices the fastest
     /// \param ii: ii[i] is the number of nonzero blocks on the i-th blocked image operator element
-    /// \param jj: domain coordinates of the nonzero blocks of RSB operator
+    /// \param jj: local domain coordinates of the nonzero blocks of the RSB operator
     /// \param v: nonzero values
     /// \param kronv: nonzero values for the Kronecker blocks
     /// \param ctx: context
@@ -2920,12 +2922,14 @@ namespace superbblas {
             detail::get_bsr_components_from_handle<Nd, Ni, T>(bsrh, ctx, ncomponents, comm, co);
 
         wait(detail::bsr_krylov<Nd, Ni, Nx, Ny, T>(
-            alpha, *bsr, oim_, odm_, detail::get_from_size(px, ncomponents * comm.nprocs, comm),
-            ox_, fromx, sizex, dimx,
+            alpha, *bsr, oim_, odm_,
+            detail::get_from_size(px, ncomponents * comm.nprocs, comm, dimx), ox_, fromx, sizex,
+            dimx,
             detail::get_components<Nx>((T **)vx, nullptr, ctx, ncomponents, px, comm, session),
-            beta, detail::get_from_size(py, ncomponents * comm.nprocs, comm), oy_, fromy, sizey,
-            dimy, okr, detail::get_components<Ny>(vy, nullptr, ctx, ncomponents, py, comm, session),
-            comm, co));
+            beta, detail::get_from_size(py, ncomponents * comm.nprocs, comm, dimy), oy_, fromy,
+            sizey, dimy, okr,
+            detail::get_components<Ny>(vy, nullptr, ctx, ncomponents, py, comm, session), comm,
+            co));
         if (request) *request = Request{};
     }
 

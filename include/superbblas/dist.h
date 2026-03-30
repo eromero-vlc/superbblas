@@ -3460,12 +3460,22 @@ namespace superbblas {
                 beta, tr.p, tr.from, tr.size, tr.dim, tr.o, tr.v, Ndoc, comm, co);
         }
 
+        /// Check that the size of the ranges are inside the tensor dimensions
+        template <std::size_t Nd>
+        void check_from_size(const Proc_ranges<Nd> &p, const Coor<Nd> &dim) {
+            for (const auto &pi : p)
+                for (const auto &it : pi)
+                    if (!all_less_or_equal(it.at(1), dim))
+                        throw std::runtime_error("invalid partition");
+        }
+
         /// Return a From_size from a partition that can be hashed and stored
         /// \param p: partitioning
         /// \return: From_size
 
         template <std::size_t Nd, typename Comm>
-        Proc_ranges<Nd> get_from_size(const PartitionItem<Nd> *p, std::size_t n, const Comm &comm) {
+        Proc_ranges<Nd> get_from_size(const PartitionItem<Nd> *p, std::size_t n, const Comm &comm,
+                                      const Coor<Nd> &dim) {
             if (Nd == 0) return {};
             if (n % comm.nprocs != 0)
                 throw std::runtime_error("partition is incompatible with MPI communicator");
@@ -3474,6 +3484,7 @@ namespace superbblas {
             for (unsigned int i = 0; i < comm.nprocs; ++i) r[i].resize(ncomponents);
             for (unsigned int i = 0; i < n; ++i)
                 if (volume(p[i][1]) > 0) r[i / ncomponents][i % ncomponents] = p[i];
+            check_from_size(r, dim);
             return r;
         }
     }
@@ -3760,10 +3771,10 @@ namespace superbblas {
         detail::MpiComm comm = detail::get_comm(mpicomm);
 
         Request r = detail::copy<Nd0, Nd1>(
-            alpha, detail::get_from_size(p0, ncomponents0 * comm.nprocs, comm), from0, size0, dim0,
-            detail::toArray<Nd0>(o0, "o0"),
+            alpha, detail::get_from_size(p0, ncomponents0 * comm.nprocs, comm, dim0), from0, size0,
+            dim0, detail::toArray<Nd0>(o0, "o0"),
             detail::get_components<Nd0>(v0, mask0, ctx0, ncomponents0, p0, comm, session),
-            detail::get_from_size(p1, ncomponents1 * comm.nprocs, comm), from1, dim1,
+            detail::get_from_size(p1, ncomponents1 * comm.nprocs, comm, dim1), from1, dim1,
             detail::toArray<Nd1>(o1, "o1"),
             detail::get_components<Nd1>(v1, mask1, ctx1, ncomponents1, p1, comm, session), comm,
             copyadd, co);
@@ -3808,10 +3819,10 @@ namespace superbblas {
         detail::SelfComm comm = detail::get_comm();
 
         wait(detail::copy<Nd0, Nd1>(
-            alpha, detail::get_from_size(p0, ncomponents0 * comm.nprocs, comm), from0, size0, dim0,
-            detail::toArray<Nd0>(o0, "o0"),
+            alpha, detail::get_from_size(p0, ncomponents0 * comm.nprocs, comm, dim0), from0, size0,
+            dim0, detail::toArray<Nd0>(o0, "o0"),
             detail::get_components<Nd0>(v0, mask0, ctx0, ncomponents0, p0, comm, session),
-            detail::get_from_size(p1, ncomponents1 * comm.nprocs, comm), from1, dim1,
+            detail::get_from_size(p1, ncomponents1 * comm.nprocs, comm, dim1), from1, dim1,
             detail::toArray<Nd1>(o1, "o1"),
             detail::get_components<Nd1>(v1, mask1, ctx1, ncomponents1, p1, comm, session), comm,
             copyadd, co));
@@ -3863,15 +3874,16 @@ namespace superbblas {
         detail::MpiComm comm = detail::get_comm(mpicomm);
 
         Request r = detail::contraction<Nd0, Nd1, Ndo>(
-            alpha, detail::get_from_size(p0, ncomponents0 * comm.nprocs, comm), from0, size0, dim0,
-            o0_, conj0,
+            alpha, detail::get_from_size(p0, ncomponents0 * comm.nprocs, comm, dim0), from0, size0,
+            dim0, o0_, conj0,
             detail::get_components<Nd0>((T **)v0, nullptr, ctx0, ncomponents0, p0, comm, session),
-            detail::get_from_size(p1, ncomponents1 * comm.nprocs, comm), from1, size1, dim1, o1_,
-            conj1,
+            detail::get_from_size(p1, ncomponents1 * comm.nprocs, comm, dim1), from1, size1, dim1,
+            o1_, conj1,
             detail::get_components<Nd1>((T **)v1, nullptr, ctx1, ncomponents1, p1, comm, session),
-            beta, detail::get_from_size(pr, ncomponentsr * comm.nprocs, comm), fromr, sizer, dimr,
-            o_r_, detail::get_components<Ndo>(vr, nullptr, ctxr, ncomponentsr, pr, comm, session),
-            comm, co);
+            beta, detail::get_from_size(pr, ncomponentsr * comm.nprocs, comm, dimr), fromr, sizer,
+            dimr, o_r_,
+            detail::get_components<Ndo>(vr, nullptr, ctxr, ncomponentsr, pr, comm, session), comm,
+            co);
         if (request)
             *request = r;
         else
@@ -3935,15 +3947,16 @@ namespace superbblas {
         detail::SelfComm comm = detail::get_comm();
 
         wait(detail::contraction<Nd0, Nd1, Ndo>(
-            alpha, detail::get_from_size(p0, ncomponents0 * comm.nprocs, comm), from0, size0, dim0,
-            o0_, conj0,
+            alpha, detail::get_from_size(p0, ncomponents0 * comm.nprocs, comm, dim0), from0, size0,
+            dim0, o0_, conj0,
             detail::get_components<Nd0>((T **)v0, nullptr, ctx0, ncomponents0, p0, comm, session),
-            detail::get_from_size(p1, ncomponents1 * comm.nprocs, comm), from1, size1, dim1, o1_,
-            conj1,
+            detail::get_from_size(p1, ncomponents1 * comm.nprocs, comm, dim1), from1, size1, dim1,
+            o1_, conj1,
             detail::get_components<Nd1>((T **)v1, nullptr, ctx1, ncomponents1, p1, comm, session),
-            beta, detail::get_from_size(pr, ncomponentsr * comm.nprocs, comm), fromr, sizer, dimr,
-            o_r_, detail::get_components<Ndo>(vr, nullptr, ctxr, ncomponentsr, pr, comm, session),
-            comm, co));
+            beta, detail::get_from_size(pr, ncomponentsr * comm.nprocs, comm, dimr), fromr, sizer,
+            dimr, o_r_,
+            detail::get_components<Ndo>(vr, nullptr, ctxr, ncomponentsr, pr, comm, session), comm,
+            co));
         if (request) *request = Request{};
     }
 
