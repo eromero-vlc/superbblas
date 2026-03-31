@@ -2444,10 +2444,9 @@ namespace superbblas {
                 comm, co, power > 1 /* force copy when power > 1 */, doCacheAlloc, force_local);
             Components_tmpl<Nx, T, XPU0, XPU1> vx_ = vx_and_req.first;
 
-            // Scale the output vector if beta isn't 0 or 1
-            if (std::norm(beta) != 0 && beta != T{1})
-                copy<Ny, Ny, T>(beta, py, {{}}, dimy, dimy, oy, toConst(vy), py, {{}}, dimy, oy, vy,
-                                comm, EWOp::Copy{}, co, force_local);
+            // Scale the output vector
+            copy<Ny, Ny, T>(beta, py, fromy, sizey, dimy, oy, toConst(vy), py, fromy, dimy, oy, vy,
+                            comm, EWOp::Copy{}, co, force_local);
 
             Request bsr_req = [=] {
                 tracker<Cpu> _t("distributed BSR matvec", Cpu{0});
@@ -2480,14 +2479,22 @@ namespace superbblas {
                     // Copy the result to final tensor
                     Coor<Ny> fromyi = fromy;
                     if (p > 0) fromyi[power_pos] += p;
-                    if (std::norm(beta) == 0)
-                        copy<Ny, Ny, T>(p == 0 ? alpha : T{1}, py_, {{}}, sug_sizey, sug_sizey,
-                                        sug_oy, toConst(vy_), py, fromyi, dimy, oy, vy, comm,
-                                        EWOp::Copy{}, co, force_local);
-                    else
+                    if (does_proc_ranges_self_intersect(bsr.pd, bsr.dimd)) {
+                        Proc_ranges<Ny> py0_ = remove_repetitions(py_, sug_sizey);
+                        Components_tmpl<Ny, T, XPU0, XPU1> vy0_ = reorder_tensor(
+                            py_, sug_oy, {{}}, sug_sizey, sug_sizey, vy_, py0_, sug_sizey, sug_oy,
+                            comm, co, false /* don't force copy */, doCacheAlloc);
+                        copy<Ny, Ny, T>(T{1}, py_, {{}}, sug_sizey, sug_sizey, sug_oy, toConst(vy_),
+                                        py0_, {{}}, sug_sizey, sug_oy, vy0_, comm, EWOp::Copy{}, co,
+                                        force_local);
+                        copy<Ny, Ny, T>(p == 0 ? alpha : T{1}, py0_, {{}}, sug_sizey, sug_sizey,
+                                        sug_oy, toConst(vy0_), py, fromyi, dimy, oy, vy, comm,
+                                        EWOp::Add{}, co, force_local);
+                    } else {
                         copy<Ny, Ny, T>(p == 0 ? alpha : T{1}, py_, {{}}, sug_sizey, sug_sizey,
                                         sug_oy, toConst(vy_), py, fromyi, dimy, oy, vy, comm,
                                         EWOp::Add{}, co, force_local);
+                    }
 
                     // Copy the result into x for doing the next power
                     if (p == power - 1) break;
