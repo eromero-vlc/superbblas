@@ -920,8 +920,7 @@ namespace superbblas {
 
         /// Class that compute the origin permutation
 
-        template <typename IndexType, std::size_t Nd>
-        struct perm_elem : public thrust::unary_function<IndexType, IndexType> {
+        template <typename IndexType, std::size_t Nd> struct perm_elem {
             const TCoor<Nd> from, size, dim;
             const TCoor<Nd, IndexType> size_strides, strides;
             perm_elem(TCoor<Nd> from, TCoor<Nd> size, TCoor<Nd> dim,
@@ -935,8 +934,7 @@ namespace superbblas {
 
         /// Class that compute the origin permutation
 
-        template <typename IndexType>
-        struct perm_elem_rest : public thrust::unary_function<IndexType, IndexType> {
+        template <typename IndexType> struct perm_elem_rest {
             const IndexType vol;
             IndexType *const p;
             perm_elem_rest(IndexType vol, IndexType *p) : vol(vol), p(p) {}

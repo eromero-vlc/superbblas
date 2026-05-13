@@ -1135,7 +1135,7 @@ namespace superbblas {
 
 #    ifdef SUPERBBLAS_USE_THRUST
         // Return whether the element isn't zero
-        template <typename T> struct not_zero : public thrust::unary_function<T, bool> {
+        template <typename T> struct not_zero {
             __host__ __device__ bool operator()(const T &i) const { return i != T{0}; }
         };
 #    endif
@@ -1207,7 +1207,7 @@ namespace superbblas {
 
 #    ifdef SUPERBBLAS_USE_THRUST
         // Return whether the element isn't zero
-        template <typename T> struct thrust_conj : public thrust::unary_function<T, T> {
+        template <typename T> struct thrust_conj {
             __host__ __device__ T operator()(const T &i) const { return thrust::conj(i); }
         };
 #    endif

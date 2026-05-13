@@ -278,9 +278,7 @@ namespace superbblas {
         };
 
         // Scala of a number
-        template <typename T>
-        struct scale : public thrust::unary_function<typename cuda_complex<T>::type,
-                                                     typename cuda_complex<T>::type> {
+        template <typename T> struct scale {
             using cuda_T = typename cuda_complex<T>::type;
             using scalar_type = typename elem<cuda_T>::type;
             const scalar_type a;
@@ -767,8 +765,7 @@ namespace superbblas {
             /// Case: w[indicesw[i]] = v[indicesv[i]]
 
             template <typename IndexType, typename T, typename Q>
-            struct copy_n_blocking_elem_v_and_w<IndexType, T, Q, EWOp::Copy>
-                : public thrust::unary_function<IndexType, void> {
+            struct copy_n_blocking_elem_v_and_w<IndexType, T, Q, EWOp::Copy> {
                 const T alpha;
                 const T *const SB_RESTRICT v;
                 const IndexType blocking;
@@ -794,8 +791,7 @@ namespace superbblas {
             /// Case: w[indicesw[i]] += v[indicesv[i]]
 
             template <typename IndexType, typename T, typename Q>
-            struct copy_n_blocking_elem_v_and_w<IndexType, T, Q, EWOp::Add>
-                : public thrust::unary_function<IndexType, void> {
+            struct copy_n_blocking_elem_v_and_w<IndexType, T, Q, EWOp::Add> {
                 const T alpha;
                 const T *const SB_RESTRICT v;
                 const IndexType blocking;
@@ -824,8 +820,7 @@ namespace superbblas {
             /// Case: w[indicesw[i]] = v[i]
 
             template <typename IndexType, typename T, typename Q>
-            struct copy_n_blocking_elem_w<IndexType, T, Q, EWOp::Copy>
-                : public thrust::unary_function<IndexType, void> {
+            struct copy_n_blocking_elem_w<IndexType, T, Q, EWOp::Copy> {
                 const T alpha;
                 const T *const SB_RESTRICT v;
                 const IndexType blocking;
@@ -844,8 +839,7 @@ namespace superbblas {
             /// Case: w[indicesw[i]] += v[i]
 
             template <typename IndexType, typename T, typename Q>
-            struct copy_n_blocking_elem_w<IndexType, T, Q, EWOp::Add>
-                : public thrust::unary_function<IndexType, void> {
+            struct copy_n_blocking_elem_w<IndexType, T, Q, EWOp::Add> {
                 const T alpha;
                 const T *const SB_RESTRICT v;
                 const IndexType blocking;
@@ -867,8 +861,7 @@ namespace superbblas {
             /// Case: w[i] = v[indicesv[i]]
 
             template <typename IndexType, typename T, typename Q>
-            struct copy_n_blocking_elem_v<IndexType, T, Q, EWOp::Copy>
-                : public thrust::unary_function<IndexType, void> {
+            struct copy_n_blocking_elem_v<IndexType, T, Q, EWOp::Copy> {
                 const T alpha;
                 const T *const SB_RESTRICT v;
                 const IndexType blocking;
@@ -887,8 +880,7 @@ namespace superbblas {
             /// Case: w[i] += v[indicesv[i]]
 
             template <typename IndexType, typename T, typename Q>
-            struct copy_n_blocking_elem_v<IndexType, T, Q, EWOp::Add>
-                : public thrust::unary_function<IndexType, void> {
+            struct copy_n_blocking_elem_v<IndexType, T, Q, EWOp::Add> {
                 const T alpha;
                 const T *const SB_RESTRICT v;
                 const IndexType blocking;
