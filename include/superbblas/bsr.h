@@ -38,8 +38,9 @@ namespace superbblas {
 
     /// Matrix layout
     enum MatrixLayout {
-        RowMajor,   // the Kronecker labels and the column index are the fastest indices
-        ColumnMajor // the column index and Kronecker labels are the slowest indices
+        RowMajor,    // the Kronecker labels and the column index are the fastest indices
+        ColumnMajor, // the column index and Kronecker labels are the slowest indices
+        Any,         // no particular ordering
     };
 
     // /// Handle for a BSR operator
@@ -519,6 +520,406 @@ namespace superbblas {
         };
 #else
 
+        namespace aux_sptensor_tensor_product {
+            template <typename IndexType> IndexType volume(int N, const IndexType *dim) {
+                IndexType vol = 1;
+                for (int i = 0; i < N; ++i) vol *= dim[i];
+                return vol;
+            }
+
+            template <typename IndexType>
+            IndexType volume(int N, const IndexType *p, const IndexType *dim) {
+                IndexType vol = 1;
+                for (int i = 0; i < N; ++i) vol *= dim[p[i]];
+                return vol;
+            }
+
+            template <typename IndexType>
+            void copy_coor(int N, const IndexType *dim, IndexType *coor) {
+                for (int i = 0; i < N; ++i) { coor[i] = dim[i]; }
+            }
+
+            template <typename IndexType>
+            void copy_coor(int N, const IndexType *dim, const IndexType *p, IndexType *coor) {
+                for (int i = 0; i < N; ++i) { coor[i] = dim[p[i]]; }
+            }
+
+            template <typename IndexType>
+            bool is_compatible(int N, const IndexType *p, const IndexType *coor_p,
+                               const IndexType *coor_b) {
+                for (int i = 0; i < N; ++i) {
+                    if (coor_p[p[i]] != coor_b[i]) return false;
+                }
+                return true;
+            }
+
+            template <typename IndexType>
+            void copy_stride(int N, const IndexType *dim, IndexType *stride) {
+                IndexType step = 1;
+                for (int i = 0; i < N; ++i) {
+                    stride[i] = step;
+                    step *= dim[i];
+                }
+            }
+
+            template <typename IndexType>
+            void copy_stride(int N, const IndexType *dim, const IndexType *p, IndexType *stride) {
+                IndexType step = 1;
+                for (int i = 0; i < N; ++i) {
+                    stride[i] = step;
+                    step *= dim[p[i]];
+                }
+            }
+        }
+
+        /// Contracts a sparse subtensor `S` and a dense subtensor `X` resulting in a dense subtensor `Y`:
+        ///   S * X -> Y .
+        /// The sparse tensor has `s_rows_N` dense dimensions and `s_cols_N` dimensions and it represented
+        /// as a CSR matrix where the dense dimensions are the "rows" and the sparse dimensions are the "columns".
+        /// That is, `s_i[i]..s_i[i+1]` are the indices in `s_j` and `s_values` of the nonzero values for the i-th
+        /// dense element.
+        /// The user should indicate which coordinates to contract by giving permutations of the coordinates of
+        /// `S`, `X` and `Y` such that they have the form `[A, B, T]` for `S`, `[C, B, T]` for `X` and `[A, C, T]` for `S`,
+        /// where:
+        /// - `A` are the common directions of the tensors `S` and `Y`,
+        /// - `B` are the common directions of the tensors `S` and `X`,
+        /// - `C` are the common directions of the tensors `X` and `Y`,
+        /// - `T` are the common directions of the tensors `S`, `X` and `Y`.
+        /// \param s_rows_N: number of dense dimensions of the sparse tensor
+        /// \param s_dim_rows: number of elements in each of the dense dimensions of the sparse tensor
+        /// \param s_cols_N: number of sparse dimensions of the sparse tensor
+        /// \param s_dim_cols: number of elements in each of the sparse dimensions of the sparse tensor
+        /// \param s_i: `s_i[i]..s_i[i+1]` indices in `s_j` and `s_values` with the nonzero values for the i-th dense element
+        /// \param s_j: `s_j[i]` index of the position of the i-th nonzero value
+        /// \param s_values: `s_values[i]` value for the i-th nonzero value
+        /// \param s_from_rows: first dense coordinate of the sparse tensor to contract
+        /// \param s_from_cols: first sparse coordinate of the sparse tensor to contract
+        /// \param s_size_rows: number of elements in each dense direction of the sparse tensor to contract
+        /// \param s_size_cols: number of elements in each sparse direction of the sparse tensor to contract
+        /// \param x_N: number of dimensions of input dense tensor `X`
+        /// \param x_dim: number of elements of the input tensor in each direction
+        /// \param x_values: pointer to the values of the dense tensor
+        /// \param x_from: coordinates of first element of the subtensor of the dense tensor to contract
+        /// \param x_size: number of elements in each direction of the subtensor of the dense tensor to contract
+        /// \param y_N: number of dimensions of output dense tensor `Y`
+        /// \param y_dim: number of elements of the output tensor in each direction
+        /// \param y_values: pointer to the values of the output dense tensor
+        /// \param y_from: coordinates of first element of the subtensor of the dense output tensor
+        /// \param y_size: number of elements in each direction of the subtensor of the dense output tensor
+        /// \param p_ABT: permutation of the coordinates of sparse tensor (first all the sparse dimensions, then the dense dimensions)
+        ///           for having the form (A, B, T)
+        /// \param p_CBT: permutation of the dense input tensor coordinates to have the form (C, B, T)
+        /// \param p_ACT: permutation of the dense output tensor coordinates to have the form (A, C, T)
+
+        template <typename T, typename IndexType>
+        void sptensor_tensor_product(
+            int s_rows_N, const IndexType *SB_RESTRICT s_dim_rows, int s_cols_N,
+            const IndexType *SB_RESTRICT s_dim_cols, const IndexType *SB_RESTRICT s_i,
+            const IndexType *SB_RESTRICT s_j, const T *SB_RESTRICT s_values,
+            const IndexType *SB_RESTRICT s_from_rows, const IndexType *SB_RESTRICT s_from_cols,
+            const IndexType *SB_RESTRICT s_size_rows,
+            const IndexType *SB_RESTRICT s_size_cols, //
+            int x_N, const IndexType *SB_RESTRICT x_dim, const T *SB_RESTRICT x_values,
+            const IndexType *SB_RESTRICT x_from,
+            const IndexType *SB_RESTRICT x_size, //
+            int y_N, const IndexType *SB_RESTRICT y_dim, T *SB_RESTRICT y_values,
+            const IndexType *SB_RESTRICT y_from, const IndexType *SB_RESTRICT y_size, //
+            const IndexType *SB_RESTRICT p_ABT, const IndexType *SB_RESTRICT p_CBT,
+            const IndexType *SB_RESTRICT p_ACT, int NA, int NB, int NC, int NT) {
+
+            using namespace aux_sptensor_tensor_product;
+
+            // Some basic checks
+            for (const auto &[N, size, dim] :
+                 std::array<std::tuple<int, const IndexType *, const IndexType *>, 4>{
+                     {{s_rows_N, s_size_rows, s_dim_rows},
+                      {s_cols_N, s_size_cols, s_dim_cols},
+                      {x_N, x_size, x_dim},
+                      {y_N, y_size, y_dim}}}) {
+                for (int i = 0; i < N; ++i) {
+                    if (size[i] > dim[i]) throw std::runtime_error("invalid input");
+                }
+            }
+            if (NA + NB + NT != s_rows_N + s_cols_N || NC + NB + NT != x_N || NA + NC + NT != y_N)
+                throw std::runtime_error("invalid input");
+
+            // Deal with trivial cases
+            if ((s_rows_N == 0 && s_cols_N == 0) || x_N == 0 || y_N == 0 ||
+                (s_rows_N > 0 && volume(s_rows_N, s_size_rows) == 0) ||
+                (s_cols_N > 0 && volume(s_cols_N, s_size_cols) == 0) || volume(x_N, x_size) == 0 ||
+                volume(y_N, y_size) == 0) {
+                return;
+            }
+
+            // Find the volume for each part
+            std::vector<IndexType> size_B(NB);
+            copy_coor(NB, x_size, p_CBT + NC, size_B.data());
+            std::vector<IndexType> size_C(NC);
+            copy_coor(NC, x_size, p_CBT, size_C.data());
+            {
+                std::vector<IndexType> size_A(NA);
+                copy_coor(NA, y_size, p_ACT, size_A.data());
+                std::vector<IndexType> size_T(NT);
+                copy_coor(NT, x_size, p_CBT + NC + NB, size_T.data());
+                std::vector<IndexType> s_size(s_rows_N + s_cols_N);
+                copy_coor(s_rows_N, s_size_rows, s_size.data());
+                copy_coor(s_cols_N, s_size_cols, s_size.data() + s_rows_N);
+                if (!is_compatible(NA, p_ABT, s_size.data(), size_A.data()))
+                    throw std::runtime_error("invalid input");
+                if (!is_compatible(NB, p_ABT + NA, s_size.data(), size_B.data()))
+                    throw std::runtime_error("invalid input");
+                if (!is_compatible(NT, p_ABT + NA + NB, s_size.data(), size_T.data()))
+                    throw std::runtime_error("invalid input");
+                if (!is_compatible(NT, p_CBT + NC + NB, x_size, size_T.data()))
+                    throw std::runtime_error("invalid input");
+                if (!is_compatible(NC, p_ACT + NA, y_size, size_C.data()))
+                    throw std::runtime_error("invalid input");
+                if (!is_compatible(NT, p_ACT + NA + NC, y_size, size_T.data()))
+                    throw std::runtime_error("invalid input");
+            }
+
+            // Split A and T coordinates into the sparse rows and columns coordinates
+            // Find the "a" coor rows in B
+            std::vector<IndexType> p_A_rows, p_A_cols;
+            for (int i = 0; i < NA; ++i) {
+                if (p_ABT[i] < s_rows_N)
+                    p_A_rows.push_back(p_ABT[i]);
+                else
+                    p_A_cols.push_back(p_ABT[i] - s_rows_N);
+            }
+            for (int i = 0; i < NB; ++i) {
+                if (p_ABT[NA + i] < s_rows_N) {
+                    // FIXME: support "a" row coors in B
+                    throw std::runtime_error("unsupported");
+                }
+            }
+            std::vector<IndexType> p_T_rows, p_T_cols;
+            for (int i = 0; i < NT; ++i) {
+                if (p_ABT[NA + NB + i] < s_rows_N) {
+                    p_T_rows.push_back(p_ABT[NA + NB + i]);
+                } else {
+                    p_T_cols.push_back(p_ABT[NA + NB + i] - s_rows_N);
+                }
+            }
+
+            // Get the strides and permutations
+            std::vector<IndexType> stride_A_rows(p_A_rows.size());
+            copy_stride(p_A_rows.size(), s_size_rows, p_A_rows.data(), stride_A_rows.data());
+            std::vector<IndexType> stride_s_dim_cols(s_cols_N);
+            copy_stride(s_cols_N, s_dim_cols, stride_s_dim_cols.data());
+
+            std::vector<IndexType> stride_C(NC);
+            copy_stride(NC, size_C.data(), stride_C.data());
+
+            std::vector<IndexType> stride_T_rows(p_T_rows.size());
+            copy_stride(p_T_rows.size(), s_size_rows, p_T_rows.data(), stride_T_rows.data());
+
+            std::vector<IndexType> stride_s_rows(s_rows_N);
+            copy_stride(s_rows_N, s_size_rows, stride_s_rows.data());
+
+            // Get strides for the rows of the sparse matrix
+            std::vector<IndexType> perm_stride_rows(s_rows_N);
+            std::vector<char> perm_index_rows(s_rows_N);
+            for (int i = 0; i < s_rows_N; ++i) {
+                const std::size_t j =
+                    std::find(p_A_rows.begin(), p_A_rows.end(), i) - p_A_rows.begin();
+                if (j < p_A_rows.size()) {
+                    perm_stride_rows.at(i) = stride_A_rows.at(j);
+                    perm_index_rows.at(i) = 0;
+                } else {
+                    const auto j =
+                        std::find(p_T_rows.begin(), p_T_rows.end(), i) - p_T_rows.begin();
+                    perm_stride_rows.at(i) = stride_T_rows.at(j);
+                    perm_index_rows.at(i) = 1;
+                }
+            }
+
+            const auto get_sp_row = [](int sp_N, const IndexType *sp_from, const IndexType *sp_size,
+                                       const IndexType *sp_dim, const char *perm_index,
+                                       const IndexType *perm_stride, IndexType Ai, IndexType Ti) {
+                IndexType row = 0;
+                IndexType step = 1;
+                for (int i = 0; i < sp_N; ++i) {
+                    IndexType coor_i =
+                        ((perm_index[i] == 0 ? Ai : Ti) / perm_stride[i]) % sp_size[i];
+                    row += ((coor_i + sp_from[i]) % sp_dim[i]) * step;
+                    step *= sp_dim[i];
+                }
+                return row;
+            };
+
+            const auto check_sp_col = [](IndexType abs_index, int sp_N, const IndexType *sp_from,
+                                         const IndexType *sp_size, const IndexType *sp_dim) {
+                IndexType step = 1;
+                for (int i = 0; i < sp_N; ++i) {
+                    if ((abs_index / step - sp_from[i] + sp_dim[i]) % sp_dim[i] >= sp_size[i])
+                        return false;
+                    step *= sp_dim[i];
+                }
+                return true;
+            };
+
+            // Get strides for the input dense tensor, x
+            std::vector<IndexType> perm_stride_x(x_N);
+            std::vector<IndexType> perm_from_x(x_N);
+            std::vector<char> perm_index_x(x_N);
+            for (int i = 0; i < x_N; ++i) {
+                const int j = std::find(p_CBT, p_CBT + x_N, i) - p_CBT;
+                if (j < NC) {
+                    perm_from_x.at(i) = 0;
+                    perm_stride_x.at(i) = stride_C.at(j);
+                    perm_index_x.at(i) = 0;
+                } else if (j - NC < NB) {
+                    if (p_ABT[NA + j - NC] < s_rows_N) throw std::runtime_error("unsupported");
+                    const auto js_cols = p_ABT[NA + j - NC] - s_rows_N;
+                    perm_from_x.at(i) =
+                        (s_dim_cols[js_cols] - s_from_cols[js_cols]) % s_dim_cols[js_cols];
+                    perm_stride_x.at(i) = stride_s_dim_cols.at(js_cols);
+                    perm_index_x.at(i) = 1;
+                } else if (j - NC - NB < NT) {
+                    const std::size_t ja =
+                        std::find(p_T_rows.begin(), p_T_rows.end(), p_ABT[NA + NB + j - NC - NB]) -
+                        p_T_rows.begin();
+                    if (ja < p_T_rows.size()) {
+                        perm_from_x.at(i) = 0;
+                        perm_stride_x.at(i) = stride_T_rows.at(ja);
+                        perm_index_x.at(i) = 2;
+                    } else {
+                        const auto js_cols = p_ABT[NA + NB + j - NC - NB] - s_rows_N;
+                        perm_from_x.at(i) =
+                            (s_dim_cols[js_cols] - s_from_cols[js_cols]) % s_dim_cols[js_cols];
+                        perm_stride_x.at(i) = stride_s_dim_cols.at(js_cols);
+                        perm_index_x.at(i) = 1;
+                    }
+                }
+            }
+
+            const auto get_x_index = [](int x_N, const IndexType *x_from, const IndexType *x_size,
+                                        const IndexType *x_dim, const char *perm_index,
+                                        const IndexType *perm_from, const IndexType *perm_stride,
+                                        IndexType Ci, IndexType col, IndexType Trowsi) {
+                IndexType index = 0;
+                IndexType step = 1;
+                for (int i = 0; i < x_N; ++i) {
+                    IndexType coor_i =
+                        ((perm_index[i] == 0 ? Ci : (perm_index[i] == 1 ? col : Trowsi)) /
+                             perm_stride[i] +
+                         perm_from[i]) %
+                        x_size[i];
+                    index += ((coor_i + x_from[i]) % x_dim[i]) * step;
+                    step *= x_dim[i];
+                }
+                return index;
+            };
+
+            // Get strides for the output dense tensor, y
+            std::vector<IndexType> perm_stride_y(y_N);
+            std::vector<IndexType> perm_from_y(y_N);
+            std::vector<char> perm_index_y(y_N);
+            for (int i = 0; i < y_N; ++i) {
+                const int j = std::find(p_ACT, p_ACT + y_N, i) - p_ACT;
+                if (j < NA) {
+                    const std::size_t ja =
+                        std::find(p_A_rows.begin(), p_A_rows.end(), p_ABT[j]) - p_A_rows.begin();
+                    if (ja < p_A_rows.size()) {
+                        perm_from_y.at(i) = 0;
+                        perm_stride_y.at(i) = stride_A_rows.at(ja);
+                        perm_index_y.at(i) = 0;
+                    } else {
+                        const auto js_cols = p_ABT[j] - s_rows_N;
+                        perm_from_y.at(i) =
+                            (s_dim_cols[js_cols] - s_from_cols[js_cols]) % s_dim_cols[js_cols];
+                        perm_stride_y.at(i) = stride_s_dim_cols.at(js_cols);
+                        perm_index_y.at(i) = 1;
+                    }
+                } else if (j - NA < NC) {
+                    perm_from_y.at(i) = 0;
+                    perm_stride_y.at(i) = stride_C.at(j - NA);
+                    perm_index_y.at(i) = 2;
+                } else if (j - NA - NC < NT) {
+                    const std::size_t ja =
+                        std::find(p_T_rows.begin(), p_T_rows.end(), p_ABT[NA + NB + j - NA - NC]) -
+                        p_T_rows.begin();
+                    if (ja < p_T_rows.size()) {
+                        perm_from_y.at(i) = 0;
+                        perm_stride_y.at(i) = stride_T_rows.at(ja);
+                        perm_index_y.at(i) = 3;
+                    } else {
+                        const auto js_cols = p_ABT[NA + NB + j - NA - NC] - s_rows_N;
+                        perm_from_y.at(i) =
+                            (s_dim_cols[js_cols] - s_from_cols[js_cols]) % s_dim_cols[js_cols];
+                        perm_stride_y.at(i) = stride_s_dim_cols.at(js_cols);
+                        perm_index_y.at(i) = 1;
+                    }
+                }
+            }
+
+            const auto get_y_index = [](int y_N, const IndexType *y_from, const IndexType *y_size,
+                                        const IndexType *y_dim, const char *perm_index,
+                                        const IndexType *perm_from, const IndexType *perm_stride,
+                                        IndexType Arowsi, IndexType col, IndexType Ci,
+                                        IndexType Trowsi) {
+                IndexType index = 0;
+                IndexType step = 1;
+                for (int i = 0; i < y_N; ++i) {
+                    IndexType coor_i =
+                        ((perm_index[i] == 0
+                              ? Arowsi
+                              : (perm_index[i] == 1 ? col : (perm_index[i] == 2 ? Ci : Trowsi))) /
+                             perm_stride[i] +
+                         perm_from[i]) %
+                        y_size[i];
+                    index += ((coor_i + y_from[i]) % y_dim[i]) * step;
+                    step *= y_dim[i];
+                }
+                return index;
+            };
+
+            // Do the products
+            // ABT x CBT->ACT
+            // (rows, cols) x CBT->ACT
+            // rows in AT, cols in ABT
+            const auto vol_T_rows =
+                NT == 0 ? 1 : volume(p_T_rows.size(), p_T_rows.data(), s_size_rows);
+            const auto vol_A_rows =
+                NA == 0 ? 1 : volume(p_A_rows.size(), p_A_rows.data(), s_size_rows);
+            const auto vol_C = NC == 0 ? 1 : volume(NC, p_CBT, x_size);
+#    ifdef _OPENMP
+#        pragma omp parallel for schedule(static) collapse(2)
+#    endif
+            for (IndexType Trowsi = 0; Trowsi < vol_T_rows; ++Trowsi) {
+                for (IndexType Arowsi = 0; Arowsi < vol_A_rows; ++Arowsi) {
+                    const auto s_row =
+                        get_sp_row(s_rows_N, s_from_rows, s_size_rows, s_dim_rows,
+                                   perm_index_rows.data(), perm_stride_rows.data(), Arowsi, Trowsi);
+                    for (IndexType ji = s_i[s_row], jn = s_i[s_row + 1]; ji < jn; ++ji) {
+                        const auto col = s_j[ji];
+                        if (!check_sp_col(col, s_cols_N, s_from_cols, s_size_cols, s_dim_cols))
+                            continue;
+                        const auto s_val = s_values[ji];
+                        for (IndexType Ci = 0; Ci < vol_C; ++Ci) {
+                            const auto xi = get_x_index(x_N, x_from, x_size, x_dim,
+                                                        perm_index_x.data(), perm_from_x.data(),
+                                                        perm_stride_x.data(), Ci, col, Trowsi);
+                            const auto yi = get_y_index(
+                                y_N, y_from, y_size, y_dim, perm_index_y.data(), perm_from_y.data(),
+                                perm_stride_y.data(), Arowsi, col, Ci, Trowsi);
+
+                            const auto x_val = x_values[xi];
+                            y_values[yi] += s_val * x_val;
+                        }
+                    }
+                }
+            }
+        }
+
+        template <std::size_t Nd, std::size_t Ni, std::size_t Nx, std::size_t Ny>
+        std::tuple<std::size_t, std::size_t, std::size_t, std::size_t>
+        local_bsr_krylov_find_real_dims(const Coor<Ni> &dimi, const Coor<Nd> &dimd,
+                                        const Order<Ni> &oi, const Order<Nd> &od,
+                                        const Coor<Nx> &dimx, const Order<Nx> &ox,
+                                        const Coor<Ny> &dimy, const Order<Ny> &oy);
+
         template <std::size_t Nd, std::size_t Ni, typename T> struct BSR<Nd, Ni, T, Cpu> {
             BSRComponent<Nd, Ni, T, Cpu> v; ///< BSR general information
             vector<IndexType, Cpu> ii, jj;  ///< BSR row and column nonzero indices
@@ -703,6 +1104,82 @@ namespace superbblas {
                         }
                     }
                 }
+            }
+
+            template <std::size_t Nx, std::size_t Ny>
+            void operator()(const Order<Ni> &oim, const Order<Nd> &odm, const Coor<Nx> &dimx,
+                            const Order<Nx> &ox, const vector<T, Cpu> &vx, const Coor<Ny> &dimy,
+                            const Order<Ny> &oy, vector<T, Cpu> &vy) const {
+                const T alpha{1};
+                if (v.kron_it.size() > 0) throw std::runtime_error("Not implemented");
+                const T *x = vx.data();
+                T *y = vy.data();
+                const T beta{0};
+                xscal(volume(dimy), beta, y, 1, Cpu{});
+
+                std::size_t ni, nd, nx, ny;
+                std::tie(ni, nd, nx, ny) =
+                    local_bsr_krylov_find_real_dims(v.dimi, v.dimd, oim, odm, dimx, ox, dimy, oy);
+
+                // Find the permutations
+                Coor<Ni + Nd> p_ABT;
+                Coor<Nx> p_CBT;
+                Coor<Ny> p_ACT;
+                Order<Ni + Nd> os;
+                std::copy_n(oim.begin(), ni, os.begin());
+                std::copy_n(odm.begin(), nd, os.begin() + ni);
+                const auto ns = ni + nd;
+                int na = 0, nb = 0, nc = 0, nt = 0;
+                auto is_in = [](auto o, std::size_t n, char c) {
+                    return std::find(o.begin(), o.begin() + n, c) != o.begin() + n;
+                };
+                auto index_in = [](auto o, std::size_t n, char c) {
+                    return std::find(o.begin(), o.begin() + n, c) - o.begin();
+                };
+                for (std::size_t i = 0; i < ny; ++i) {
+                    const auto c = oy.at(i);
+                    if (is_in(os, ns, c) && !is_in(ox, nx, c)) {
+                        p_ACT[na] = i;
+			p_ABT[na] = index_in(os, ns, c);
+                        na++;
+                    }
+                }
+                for (std::size_t i = 0; i < nx; ++i) {
+                    const auto c = ox.at(i);
+                    if (!is_in(os, ns, c) && is_in(oy, ny, c)) {
+                        p_ACT[na + nc] = index_in(oy, ny, c);
+                        p_CBT[nc] = i;
+                        nc++;
+                    }
+                }
+                for (std::size_t i = 0; i < nx; ++i) {
+                    const auto c = ox.at(i);
+                    if (is_in(os, ns, c) && !is_in(oy, ny, c)) {
+                        p_ABT[na + nb] = index_in(os, ns, c);
+                        p_CBT[nc + nb] = i;
+                        nb++;
+                    }
+                }
+                for (std::size_t i = 0; i < nx; ++i) {
+                    const auto c = ox.at(i);
+                    if (is_in(os, ns, c) && is_in(oy, ny, c)) {
+                        p_ABT[na + nb + nt] = index_in(os, ns, c);
+                        p_CBT[nc + nb + nt] = i;
+                        p_ACT[na + nc + nt] = is_in(oy, ny, c);
+                        nt++;
+                    }
+                }
+
+                Coor<Ni> s_from_rows{{}};
+                Coor<Nd> s_from_cols{{}};
+                Coor<Nx> x_from{{}};
+                Coor<Ny> y_from{{}};
+                const T *nonzeros = v.it.data();
+                sptensor_tensor_product(
+                    ni, v.dimi.data(), nd, v.dimd.data(), ii.data(), jj.data(), nonzeros,
+                    s_from_rows.data(), s_from_cols.data(), v.dimi.data(), v.dimd.data(), nx,
+                    dimx.data(), x, x_from.data(), dimx.data(), ny, dimy.data(), y, y_from.data(),
+                    dimy.data(), p_ABT.data(), p_CBT.data(), p_ACT.data(), na, nb, nc, nt);
             }
 
             ~BSR() {}
@@ -1725,6 +2202,65 @@ namespace superbblas {
             return {Indices<XPU>(0, v.it.ctx()), Indices<XPU>(0, v.it.ctx()), false, -1, 0};
         }
 
+        /// Return the real dimensions of the given orders
+        /// \param dimi: dimension of the RSB operator image in consecutive ranges
+        /// \param dimd: dimension of the RSB operator domain in consecutive ranges
+        /// \param oi: dimension labels for the RSB operator image space
+        /// \param od: dimension labels for the RSB operator domain space
+        /// \param dimx: dimension of the right tensor in consecutive ranges
+        /// \param ox: dimension labels for the right operator
+        /// \param dimy: dimension of the resulting tensor in consecutive ranges
+        /// \param oy: dimension labels for the output tensor
+        /// \return {ni, nd, nx, ny}: returning the number of real dimensions
+
+        template <std::size_t Nd, std::size_t Ni, std::size_t Nx, std::size_t Ny>
+        std::tuple<std::size_t, std::size_t, std::size_t, std::size_t>
+        local_bsr_krylov_find_real_dims(const Coor<Ni> &dimi, const Coor<Nd> &dimd,
+                                        const Order<Ni> &oi, const Order<Nd> &od,
+                                        const Coor<Nx> &dimx, const Order<Nx> &ox,
+                                        const Coor<Ny> &dimy, const Order<Ny> &oy) {
+
+            // Detect real dimension in oi, od, x and y
+            std::size_t ni = 0;
+            for (int i = (int)Ni - 1; i >= 0; --i) {
+                if (dimi[i] != 1 || std::find(od.begin(), od.end(), oi[i]) != od.end() ||
+                    std::find(ox.begin(), ox.end(), oi[i]) != ox.end() ||
+                    std::find(oy.begin(), oy.end(), oi[i]) != oy.end()) {
+                    ni = i + 1;
+                    break;
+                }
+            }
+            std::size_t nd = 0;
+            for (int i = (int)Nd - 1; i >= 0; --i) {
+                if (dimd[i] != 1 || std::find(oi.begin(), oi.end(), od[i]) != oi.end() ||
+                    std::find(ox.begin(), ox.end(), od[i]) != ox.end() ||
+                    std::find(oy.begin(), oy.end(), od[i]) != oy.end()) {
+                    nd = i + 1;
+                    break;
+                }
+            }
+            std::size_t nx = 0;
+            for (int i = (int)Nx - 1; i >= 0; --i) {
+                if (dimx[i] != 1 || std::find(od.begin(), od.end(), ox[i]) != od.end() ||
+                    std::find(oi.begin(), oi.end(), ox[i]) != oi.end() ||
+                    std::find(oy.begin(), oy.end(), ox[i]) != oy.end()) {
+                    nx = i + 1;
+                    break;
+                }
+            }
+            std::size_t ny = 0;
+            for (int i = (int)Ny - 1; i >= 0; --i) {
+                if (dimy[i] != 1 || std::find(od.begin(), od.end(), oy[i]) != od.end() ||
+                    std::find(oi.begin(), oi.end(), oy[i]) != oi.end() ||
+                    std::find(ox.begin(), ox.end(), oy[i]) != ox.end()) {
+                    ny = i + 1;
+                    break;
+                }
+            }
+
+            return {ni, nd, nx, ny};
+        }
+
         /// Return splitting of dimension labels for the RSB operator - tensor multiplication
         /// \param dimi: dimension of the RSB operator image in consecutive ranges
         /// \param dimd: dimension of the RSB operator domain in consecutive ranges
@@ -1778,42 +2314,9 @@ namespace superbblas {
                                     Order<Nx> &sug_ox, Order<Ny> &sug_oy, Order<Ny> &sug_oy_trans) {
 
             // Detect real dimension in oi, od, x and y
-            std::size_t ni = 0;
-            for (int i = (int)Ni - 1; i >= 0; --i) {
-                if (dimi[i] != 1 || std::find(od.begin(), od.end(), oi[i]) != od.end() ||
-                    std::find(ox.begin(), ox.end(), oi[i]) != ox.end() ||
-                    std::find(oy.begin(), oy.end(), oi[i]) != oy.end()) {
-                    ni = i + 1;
-                    break;
-                }
-            }
-            std::size_t nd = 0;
-            for (int i = (int)Nd - 1; i >= 0; --i) {
-                if (dimd[i] != 1 || std::find(oi.begin(), oi.end(), od[i]) != oi.end() ||
-                    std::find(ox.begin(), ox.end(), od[i]) != ox.end() ||
-                    std::find(oy.begin(), oy.end(), od[i]) != oy.end()) {
-                    nd = i + 1;
-                    break;
-                }
-            }
-            std::size_t nx = 0;
-            for (int i = (int)Nx - 1; i >= 0; --i) {
-                if (dimx[i] != 1 || std::find(od.begin(), od.end(), ox[i]) != od.end() ||
-                    std::find(oi.begin(), oi.end(), ox[i]) != oi.end() ||
-                    std::find(oy.begin(), oy.end(), ox[i]) != oy.end()) {
-                    nx = i + 1;
-                    break;
-                }
-            }
-            std::size_t ny = 0;
-            for (int i = (int)Ny - 1; i >= 0; --i) {
-                if (dimy[i] != 1 || std::find(od.begin(), od.end(), oy[i]) != od.end() ||
-                    std::find(oi.begin(), oi.end(), oy[i]) != oi.end() ||
-                    std::find(ox.begin(), ox.end(), oy[i]) != ox.end()) {
-                    ny = i + 1;
-                    break;
-                }
-            }
+            std::size_t ni, nd, nx, ny;
+            std::tie(ni, nd, nx, ny) =
+                local_bsr_krylov_find_real_dims(dimi, dimd, oi, od, dimx, ox, dimy, oy);
 
             if (co == FastToSlow) {
                 Order<Nx> sug_ox0;
@@ -1947,24 +2450,26 @@ namespace superbblas {
             Order<Nx> oC;
             std::size_t nC = 0;
             volC = (volume(dimx) * volume(dimy) == 0 ? 0 : 1);
-            enum { None, ContractWithDomain, ContractWithImage } kindx = None, kindy = None;
+            enum {
+                None,
+                ContractWithDomain,
+                ContractWithImage,
+                ContractWithBoth
+            } kindx = None,
+              kindy = None;
             bool powerFoundOnx = false;
             for (std::size_t i = 0; i < nx; ++i) {
                 char c = ox[i];
                 if (std::find(oi.begin(), oi.end(), c) != oi.end()) {
-                    if (kindx == ContractWithDomain)
-                        throw std::runtime_error(
-                            "Unsupported to contract dense input tensor with domain and image "
-                            "dimensions of the sparse tensor");
-                    else
+                    if (kindx == None)
                         kindx = ContractWithImage;
+                    else if (kindx == ContractWithDomain)
+                        kindx = ContractWithBoth;
                 } else if (std::find(od.begin(), od.end(), c) != od.end()) {
-                    if (kindx == ContractWithImage)
-                        throw std::runtime_error(
-                            "Unsupported to contract dense input tensor with domain and image "
-                            "dimensions of the sparse tensor");
-                    else
+                    if (kindx == None)
                         kindx = ContractWithDomain;
+                    else if (kindx == ContractWithImage)
+                        kindx = ContractWithBoth;
                 } else if (okr != 0 && c == okr) {
                     powerFoundOnx = true;
                     if (dimx[i] > 1)
@@ -1989,19 +2494,15 @@ namespace superbblas {
             for (std::size_t i = 0; i < ny; ++i) {
                 char c = oy[i];
                 if (std::find(oi.begin(), oi.end(), c) != oi.end()) {
-                    if (kindy == ContractWithDomain)
-                        throw std::runtime_error(
-                            "Unsupported to an output tensor with dimensions both from the domain "
-                            "and the image on the sparse matrix");
-                    else
+                    if (kindy == None)
                         kindy = ContractWithImage;
+                    else if (kindy == ContractWithDomain)
+                        kindy = ContractWithBoth;
                 } else if (std::find(od.begin(), od.end(), c) != od.end()) {
-                    if (kindy == ContractWithImage)
-                        throw std::runtime_error(
-                            "Unsupported to an output tensor with dimensions both from the domain "
-                            "and the image on the sparse matrix");
-                    else
+                    if (kindy == None)
                         kindy = ContractWithDomain;
+                    else if (kindy == ContractWithImage)
+                        kindy = ContractWithBoth;
                 } else if (okr != 0 && c == okr) {
                     powerFoundOny = true;
                     power = dimy[i];
@@ -2043,13 +2544,28 @@ namespace superbblas {
                 throw std::runtime_error(
                     "Unsupported to the resulting dense tensor of contracting sparse and dense "
                     "tensors has no common dimension with the sparse tensor");
-            if (kindx == kindy) throw std::runtime_error("Invalid contraction");
+            if (kindx == ContractWithBoth || kindy == ContractWithBoth) {
+                if (is_kron) {
+                    throw std::runtime_error(
+                        "Unsupported to an output tensor with dimensions both from the domain "
+                        "and the image on the sparse matrix when using the Kronecker format");
+                }
+                kindx = kindy = ContractWithBoth;
+            } else {
+                if (kindx == kindy) throw std::runtime_error("Invalid contraction");
+            }
 
             if (!is_kron) {
-                // Contraction with the blocking:
-                // Check that ox should one of (okr,C,D,d) or (okr,D,d,C) or (okr,C,I,i) or (okr,I,i,C)
+                if (kindx == ContractWithBoth) {
+                    lx = ly = Any;
+                    sug_ox = ox;
+                    sug_oy_trans = sug_oy = oy;
+                    transSp = false;
 
-                if (kindx == ContractWithDomain) {
+                    // Contraction with the blocking:
+                    // Check that ox should one of (okr,C,D,d) or (okr,D,d,C) or (okr,C,I,i) or (okr,I,i,C)
+
+                } else if (kindx == ContractWithDomain) {
                     auto sCx = std::search(ox.begin(), ox.end(), oC.begin(), oC.begin() + nC);
                     auto sDx = std::search(ox.begin(), ox.end(), oDs.begin(), oDs.begin() + nDs);
                     auto sdx = std::search(ox.begin(), ox.end(), ods.begin(), ods.begin() + nds);
@@ -2242,22 +2758,26 @@ namespace superbblas {
                 throw std::runtime_error(
                     "Unsupported layout for the input and output dense tensors");
 
-            std::size_t vold = volume(bsr.v.dimd), voli = volume(bsr.v.dimi);
-            IndexType ki = volume(bsr.v.kroni);
-            IndexType kd = volume(bsr.v.krond);
-            if (vold == 0 || voli == 0) return;
-            // Layout for row major: (kd,n,bd,rows)
-            // Layout for column major: (bd,rows,n,kd)
-            IndexType ldx = lx == ColumnMajor ? (!transSp ? vold / kd : voli / ki)
-                                              : (!transSp ? kd : ki) * volC;
-            IndexType ldy = ly == ColumnMajor ? (!transSp ? voli / ki : vold / kd)
-                                              : (!transSp ? ki : kd) * volC;
+            if (lx == Any) {
+                bsr(oim, odm, dimx, ox, vx, dimy, oy, vy);
+            } else {
+                std::size_t vold = volume(bsr.v.dimd), voli = volume(bsr.v.dimi);
+                IndexType ki = volume(bsr.v.kroni);
+                IndexType kd = volume(bsr.v.krond);
+                if (vold == 0 || voli == 0) return;
+                // Layout for row major: (kd,n,bd,rows)
+                // Layout for column major: (bd,rows,n,kd)
+                IndexType ldx = lx == ColumnMajor ? (!transSp ? vold / kd : voli / ki)
+                                                  : (!transSp ? kd : ki) * volC;
+                IndexType ldy = ly == ColumnMajor ? (!transSp ? voli / ki : vold / kd)
+                                                  : (!transSp ? ki : kd) * volC;
 
-            // Do the contraction
-            _t.flops = bsr.getFlopsPerMatvec(volC, lx);
-            _t.memops = bsr.getMemopsPerMatvec(volC, lx);
-            _t.arity = volC;
-            bsr(transSp, vx, ldx, lx, vy, ldy, ly, volC);
+                // Do the contraction
+                _t.flops = bsr.getFlopsPerMatvec(volC, lx);
+                _t.memops = bsr.getMemopsPerMatvec(volC, lx);
+                _t.arity = volC;
+                bsr(transSp, vx, ldx, lx, vy, ldy, ly, volC);
+            }
         }
 
         /// Get the partitions for the dense input and output tensors
