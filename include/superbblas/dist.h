@@ -287,6 +287,14 @@ namespace superbblas {
         }
 
         template <typename Ostream, typename T>
+        Ostream &operator<<(Ostream &s, const std::vector<T> &v) {
+            s << "{";
+            for (const auto &i : v) s << " " << i;
+            s << "}";
+            return s;
+        }
+
+        template <typename Ostream, typename T>
         Ostream &operator<<(Ostream &s, const vector<T, Cpu> &v) {
             s << "{";
             for (const auto &i : v) s << " " << i;

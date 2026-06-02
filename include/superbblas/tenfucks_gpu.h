@@ -6,7 +6,7 @@
 #ifndef __SUPERBBLAS_TENFUCKS_GPU__
 #define __SUPERBBLAS_TENFUCKS_GPU__
 
-#include "platform.h"
+#include "blas.h"
 
 #if defined(SUPERBBLAS_USE_CUDA) && defined(SUPERBBLAS_GENERATE_KERNELS)
 #    if __CUDA_ARCH__ >= 800
@@ -39,7 +39,7 @@
 
 #endif
 
-#if defined(SUPERBBLAS_CREATING_LIB) // && defined(SUPERBBLAS_ROCM_SUPPORTS_TENSOR_CORES)
+#if defined(SUPERBBLAS_CREATING_LIB)
 /// Generate template instantiations for bsr_kron_3x3_4x4perm functions with template parameter T
 
 #    define DECL_BSR_KRON_3x3_4x4PERM_T(...)                                                       \
@@ -150,10 +150,11 @@ namespace superbblas {
 #    endif
             }
 
-            __global__ static void fun(const double *a, int a_ldr, int a_ldc, int *jj,
-                                       int block_rows, int num_dirs, const double *perm_scalars,
-                                       const int *perm, const double *x, int ldx, double *y,
-                                       int ldy, int ncols) {
+            __global__ static void fun(const double *SB_RESTRICT a, int a_ldr, int a_ldc,
+                                       int *SB_RESTRICT jj, int block_rows, int num_dirs,
+                                       const double *SB_RESTRICT perm_scalars,
+                                       const int *SB_RESTRICT perm, const double *SB_RESTRICT x,
+                                       int ldx, double *SB_RESTRICT y, int ldy, int ncols) {
 #    if defined(SUPERBBLAS_ROCM_SUPPORTS_TENSOR_CORES_FOR_DOUBLES)
                 (void)block_rows;
                 auto col = blockIdx.x * 4 + threadIdx.y;
@@ -242,10 +243,11 @@ namespace superbblas {
 #    endif
             }
 
-            __global__ static void fun(const float *a, int a_ldr, int a_ldc, int *jj,
-                                       int block_rows, int num_dirs, const float *perm_scalars,
-                                       const int *perm, const float *x, int ldx, float *y, int ldy,
-                                       int ncols) {
+            __global__ static void fun(const float *SB_RESTRICT a, int a_ldr, int a_ldc,
+                                       int *SB_RESTRICT jj, int block_rows, int num_dirs,
+                                       const float *SB_RESTRICT perm_scalars,
+                                       const int *SB_RESTRICT perm, const float *SB_RESTRICT x,
+                                       int ldx, float *SB_RESTRICT y, int ldy, int ncols) {
 #    if defined(SUPERBBLAS_ROCM_SUPPORTS_TENSOR_CORES)
                 (void)block_rows;
                 using float4 = __attribute__((__vector_size__(4 * sizeof(float)))) float;
@@ -408,9 +410,9 @@ namespace superbblas {
 
         template <typename T>
         __global__ void bsr_kron_3x3_4x4perm_kernel_fun(
-            const typename the_real<T>::type *a, int a_ldr, int a_ldc, int *jj, int block_rows,
-            int num_dirs, const typename the_real<T>::type *perm_scalars, const int *perm,
-            const typename the_real<T>::type *x, int ldx, typename the_real<T>::type *y, int ldy,
+            const typename the_real<T>::type * SB_RESTRICT a, int a_ldr, int a_ldc, int * SB_RESTRICT jj, int block_rows,
+            int num_dirs, const typename the_real<T>::type * SB_RESTRICT perm_scalars, const int * SB_RESTRICT perm,
+            const typename the_real<T>::type * SB_RESTRICT x, int ldx, typename the_real<T>::type * SB_RESTRICT y, int ldy,
             int ncols) {
             (void)a;
             (void)a_ldr;
@@ -442,7 +444,7 @@ namespace superbblas {
         };
 
         template <>
-        inline __global__ void
+        __global__ void
         bsr_kron_3x3_4x4perm_kernel_available<std::complex<double>>(int *flag) {
 #        if defined(SUPERBBLAS_CUDA_SUPPORTS_TENSOR_CORES_FOR_DOUBLES)
             *flag = 1;
@@ -477,10 +479,10 @@ namespace superbblas {
 	/// - {d(i/4,(i%4)*2), d(i/4,(i%4)*2+1)}
 
         template <>
-        inline __global__ void bsr_kron_3x3_4x4perm_kernel_fun<std::complex<double>>(
-            const double *a, int a_ldr, int a_ldc, int *jj, int block_rows, int num_dirs,
-            const double *perm_scalars, const int *perm, const double *x, int ldx, double *y,
-            int ldy, int ncols) {
+        __global__ void bsr_kron_3x3_4x4perm_kernel_fun<std::complex<double>>(
+            const double *SB_RESTRICT a, int a_ldr, int a_ldc, int *SB_RESTRICT jj, int block_rows,
+            int num_dirs, const double *SB_RESTRICT perm_scalars, const int *SB_RESTRICT perm,
+            const double *SB_RESTRICT x, int ldx, double *SB_RESTRICT y, int ldy, int ncols) {
 #        if defined(SUPERBBLAS_CUDA_SUPPORTS_TENSOR_CORES_FOR_DOUBLES)
             (void)block_rows;
             double c[2] = {0, 0}; ///< accumulator

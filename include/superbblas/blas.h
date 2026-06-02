@@ -554,7 +554,7 @@ namespace superbblas {
         ///       and there are gridDim.y partial inner products.
 
         template <typename T, bool is_complex>
-        inline __global__ void inner_prod_partial_gpu(int m, int n, const T *a, int ldra, int ldca,
+        __global__ void inner_prod_partial_gpu(int m, int n, const T *a, int ldra, int ldca,
                                                       bool conja, const T *b, int ldrb, int ldcb,
                                                       bool conjb, T *partial) {
             constexpr auto C = (!is_complex ? 1 : 2);
@@ -627,7 +627,7 @@ namespace superbblas {
 	/// NOTE: r(i) = beta*r(i) + alpha*\sum_{j=0:gridDimy-1} partial(j,i)
 
         template <typename T>
-        inline __global__ void inner_prod_gpu_real(int n, T alpha, const T *partial, int gridDimy,
+        __global__ void inner_prod_gpu_real(int n, T alpha, const T *partial, int gridDimy,
                                                    T beta, T *r, int ldr) {
             const int col = blockIdx.x;
             T temp = 0;
@@ -639,7 +639,7 @@ namespace superbblas {
         }
 
         template <typename T>
-        inline __global__ void inner_prod_gpu_cmplx(int n, T alphar, T alphai, const T *partial,
+        __global__ void inner_prod_gpu_cmplx(int n, T alphar, T alphai, const T *partial,
                                                     int gridDimy, T betar, T betai, T *r, int ldr) {
             const int col = blockIdx.x;
             T temp[2] = {T{0}, T{0}};

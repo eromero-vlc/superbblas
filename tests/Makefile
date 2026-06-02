@@ -17,7 +17,7 @@ SB_LDFLAGS ?=
 
 include ../make.inc
 
-SOURCES := blas.cpp dist.cpp contract.cpp storage.cpp storage_details.cpp bsr.cpp dense.cpp bsr_hist.cpp tenfucks.cpp
+SOURCES := blas.cpp dist.cpp contract.cpp storage.cpp storage_details.cpp bsr.cpp dense.cpp bsr_hist.cpp tenfucks.cpp tenducks.cpp
 
 CPU_TARGETS := $(patsubst %.cpp,%_cpu,$(SOURCES))
 CUDA_TARGETS := $(patsubst %.cpp,%_cuda,$(SOURCES))
@@ -37,7 +37,7 @@ MPILDFLAGS ?= $(if $(findstring mpi,${CXX}),\
 SB_LDFLAGS := -L$(BUILDDIR)/lib -lsuperbblas
 CUDAINCLUDE ?= -I$(CUDADIR)/include
 CUDALDFLAGS ?= -L$(CUDADIR)/lib64
-NVCCSTDLANG ?= -std c++14
+NVCCSTDLANG ?= -std c++17
 
 all_cpu: $(CPU_TARGETS)
 all_cuda: $(CUDA_TARGETS)
