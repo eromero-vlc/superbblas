@@ -14,8 +14,7 @@
 /// Generate template instantiations for sptensor_tensor_product_gpu functions with template parameter N, T, IndexType
 
 #    define DECL_SPTENSOR_TENSOR_PRODUCT_GPU_N_T_IDX(...)                                          \
-        EMIT REPLACE1(sptensor_tensor_product_gpu,                                                 \
-                      superbblas::detail::sptensor_tensor_product_gpu<N, T>)            \
+        EMIT REPLACE1(sptensor_tensor_product, superbblas::detail::sptensor_tensor_product<N, T>)  \
             REPLACE_T REPLACE(N, COOR_DIMS_MULT_4) template __VA_ARGS__;
 
 #else
@@ -75,60 +74,25 @@ namespace superbblas {
                 }
             }
 
-            /// Contracts a sparse subtensor `S` and a dense subtensor `X` resulting in a dense subtensor `Y`:
-            ///   S * X -> Y .
-            /// The sparse tensor has `s_rows_N` dense dimensions and `s_cols_N` dimensions and it represented
-            /// as a CSR matrix where the dense dimensions are the "rows" and the sparse dimensions are the "columns".
-            /// That is, `s_i[i]..s_i[i+1]` are the indices in `s_j` and `s_values` of the nonzero values for the i-th
-            /// dense element.
-            /// The user should indicate which coordinates to contract by giving permutations of the coordinates of
-            /// `S`, `X` and `Y` such that they have the form `[A, B, T]` for `S`, `[C, B, T]` for `X` and `[A, C, T]` for `S`,
-            /// where:
-            /// - `A` are the common directions of the tensors `S` and `Y`,
-            /// - `B` are the common directions of the tensors `S` and `X`,
-            /// - `C` are the common directions of the tensors `X` and `Y`,
-            /// - `T` are the common directions of the tensors `S`, `X` and `Y`.
-            /// \param s_rows_N: number of dense dimensions of the sparse tensor
-            /// \param s_dim_rows: number of elements in each of the dense dimensions of the sparse tensor
-            /// \param s_cols_N: number of sparse dimensions of the sparse tensor
-            /// \param s_dim_cols: number of elements in each of the sparse dimensions of the sparse tensor
-            /// \param s_i: `s_i[i]..s_i[i+1]` indices in `s_j` and `s_values` with the nonzero values for the i-th dense element
-            /// \param s_j: `s_j[i]` index of the position of the i-th nonzero value
-            /// \param s_values: `s_values[i]` value for the i-th nonzero value
-            /// \param s_from_rows: first dense coordinate of the sparse tensor to contract
-            /// \param s_from_cols: first sparse coordinate of the sparse tensor to contract
-            /// \param s_size_rows: number of elements in each dense direction of the sparse tensor to contract
-            /// \param s_size_cols: number of elements in each sparse direction of the sparse tensor to contract
-            /// \param x_N: number of dimensions of input dense tensor `X`
-            /// \param x_dim: number of elements of the input tensor in each direction
-            /// \param x_values: pointer to the values of the dense tensor
-            /// \param x_from: coordinates of first element of the subtensor of the dense tensor to contract
-            /// \param x_size: number of elements in each direction of the subtensor of the dense tensor to contract
-            /// \param y_N: number of dimensions of output dense tensor `Y`
-            /// \param y_dim: number of elements of the output tensor in each direction
-            /// \param y_values: pointer to the values of the output dense tensor
-            /// \param y_from: coordinates of first element of the subtensor of the dense output tensor
-            /// \param y_size: number of elements in each direction of the subtensor of the dense output tensor
-            /// \param p_ABT: permutation of the coordinates of sparse tensor (first all the sparse dimensions, then the dense dimensions)
-            ///           for having the form (A, B, T)
-            /// \param p_CBT: permutation of the dense input tensor coordinates to have the form (C, B, T)
-            /// \param p_ACT: permutation of the dense output tensor coordinates to have the form (A, C, T)
+            std::tuple<std::vector<char>, std::vector<IndexType>,                         //
+                       std::vector<char>, std::vector<IndexType>, std::vector<IndexType>, //
+                       std::vector<char>, std::vector<IndexType>, std::vector<IndexType>, //
+                       IndexType, IndexType, IndexType>
+            sptensor_tensor_product_preparation(
+                int s_rows_N, const IndexType *s_dim_rows, int s_cols_N,
+                const IndexType *s_dim_cols, const IndexType *s_from_rows,
+                const IndexType *s_from_cols, const IndexType *s_size_rows,
+                const IndexType *s_size_cols, //
+                int x_N, const IndexType *x_dim, const IndexType *x_from,
+                const IndexType *x_size, //
+                int y_N, const IndexType *y_dim, const IndexType *y_from,
+                const IndexType *y_size, //
+                const IndexType *p_ABT, const IndexType *p_CBT, const IndexType *p_ACT, int NA,
+                int NB, int NC, int NT) {
 
-            template <typename T, typename IndexType>
-            void sptensor_tensor_product(
-                int s_rows_N, const IndexType *SB_RESTRICT s_dim_rows, int s_cols_N,
-                const IndexType *SB_RESTRICT s_dim_cols, const IndexType *SB_RESTRICT s_i,
-                const IndexType *SB_RESTRICT s_j, const T *SB_RESTRICT s_values,
-                const IndexType *SB_RESTRICT s_from_rows, const IndexType *SB_RESTRICT s_from_cols,
-                const IndexType *SB_RESTRICT s_size_rows,
-                const IndexType *SB_RESTRICT s_size_cols, //
-                int x_N, const IndexType *SB_RESTRICT x_dim, const T *SB_RESTRICT x_values,
-                const IndexType *SB_RESTRICT x_from,
-                const IndexType *SB_RESTRICT x_size, //
-                int y_N, const IndexType *SB_RESTRICT y_dim, T *SB_RESTRICT y_values,
-                const IndexType *SB_RESTRICT y_from, const IndexType *SB_RESTRICT y_size, //
-                const IndexType *SB_RESTRICT p_ABT, const IndexType *SB_RESTRICT p_CBT,
-                const IndexType *SB_RESTRICT p_ACT, int NA, int NB, int NC, int NT) {
+                (void)s_from_rows;
+                (void)x_from;
+                (void)y_from;
 
                 // Some basic checks
                 for (const auto &[N, size, dim] :
@@ -144,14 +108,6 @@ namespace superbblas {
                 if (NA + NB + NT != s_rows_N + s_cols_N || NC + NB + NT != x_N ||
                     NA + NC + NT != y_N)
                     throw std::runtime_error("invalid input");
-
-                // Deal with trivial cases
-                if ((s_rows_N == 0 && s_cols_N == 0) || x_N == 0 || y_N == 0 ||
-                    (s_rows_N > 0 && volume(s_rows_N, s_size_rows) == 0) ||
-                    (s_cols_N > 0 && volume(s_cols_N, s_size_cols) == 0) ||
-                    volume(x_N, x_size) == 0 || volume(y_N, y_size) == 0) {
-                    return;
-                }
 
                 // Find the volume for each part
                 std::vector<IndexType> size_B(NB);
@@ -236,33 +192,6 @@ namespace superbblas {
                     }
                 }
 
-                const auto get_sp_row = [](int sp_N, const IndexType *sp_from,
-                                           const IndexType *sp_size, const IndexType *sp_dim,
-                                           const char *perm_index, const IndexType *perm_stride,
-                                           IndexType Ai, IndexType Ti) {
-                    IndexType row = 0;
-                    IndexType step = 1;
-                    for (int i = 0; i < sp_N; ++i) {
-                        IndexType coor_i =
-                            ((perm_index[i] == 0 ? Ai : Ti) / perm_stride[i]) % sp_size[i];
-                        row += ((coor_i + sp_from[i]) % sp_dim[i]) * step;
-                        step *= sp_dim[i];
-                    }
-                    return row;
-                };
-
-                const auto check_sp_col = [](IndexType abs_index, int sp_N,
-                                             const IndexType *sp_from, const IndexType *sp_size,
-                                             const IndexType *sp_dim) {
-                    IndexType step = 1;
-                    for (int i = 0; i < sp_N; ++i) {
-                        if ((abs_index / step - sp_from[i] + sp_dim[i]) % sp_dim[i] >= sp_size[i])
-                            return false;
-                        step *= sp_dim[i];
-                    }
-                    return true;
-                };
-
                 // Get strides for the input dense tensor, x
                 std::vector<IndexType> perm_stride_x(x_N);
                 std::vector<IndexType> perm_from_x(x_N);
@@ -297,25 +226,6 @@ namespace superbblas {
                         }
                     }
                 }
-
-                const auto get_x_index = [](int x_N, const IndexType *x_from,
-                                            const IndexType *x_size, const IndexType *x_dim,
-                                            const char *perm_index, const IndexType *perm_from,
-                                            const IndexType *perm_stride, IndexType Ci,
-                                            IndexType col, IndexType Trowsi) {
-                    IndexType index = 0;
-                    IndexType step = 1;
-                    for (int i = 0; i < x_N; ++i) {
-                        IndexType coor_i =
-                            ((perm_index[i] == 0 ? Ci : (perm_index[i] == 1 ? col : Trowsi)) /
-                                 perm_stride[i] +
-                             perm_from[i]) %
-                            x_size[i];
-                        index += ((coor_i + x_from[i]) % x_dim[i]) * step;
-                        step *= x_dim[i];
-                    }
-                    return index;
-                };
 
                 // Get strides for the output dense tensor, y
                 std::vector<IndexType> perm_stride_y(y_N);
@@ -360,6 +270,145 @@ namespace superbblas {
                     }
                 }
 
+                const auto vol_T_rows =
+                    NT == 0 ? 1 : volume(p_T_rows.size(), p_T_rows.data(), s_size_rows);
+                const auto vol_A_rows =
+                    NA == 0 ? 1 : volume(p_A_rows.size(), p_A_rows.data(), s_size_rows);
+                const auto vol_C = NC == 0 ? 1 : volume(NC, p_CBT, x_size);
+
+                return {perm_index_rows, perm_stride_rows, perm_index_x, perm_from_x,
+                        perm_stride_x,   perm_index_y,     perm_from_y,  perm_stride_y,
+                        vol_A_rows,      vol_T_rows,       vol_C};
+            }
+
+            /// Contracts a sparse subtensor `S` and a dense subtensor `X` resulting in a dense subtensor `Y`:
+            ///   S * X -> Y .
+            /// The sparse tensor has `s_rows_N` dense dimensions and `s_cols_N` dimensions and it represented
+            /// as a CSR matrix where the dense dimensions are the "rows" and the sparse dimensions are the "columns".
+            /// That is, `s_i[i]..s_i[i+1]` are the indices in `s_j` and `s_values` of the nonzero values for the i-th
+            /// dense element.
+            /// The user should indicate which coordinates to contract by giving permutations of the coordinates of
+            /// `S`, `X` and `Y` such that they have the form `[A, B, T]` for `S`, `[C, B, T]` for `X` and `[A, C, T]` for `S`,
+            /// where:
+            /// - `A` are the common directions of the tensors `S` and `Y`,
+            /// - `B` are the common directions of the tensors `S` and `X`,
+            /// - `C` are the common directions of the tensors `X` and `Y`,
+            /// - `T` are the common directions of the tensors `S`, `X` and `Y`.
+            /// \param s_rows_N: number of dense dimensions of the sparse tensor
+            /// \param s_dim_rows: number of elements in each of the dense dimensions of the sparse tensor
+            /// \param s_cols_N: number of sparse dimensions of the sparse tensor
+            /// \param s_dim_cols: number of elements in each of the sparse dimensions of the sparse tensor
+            /// \param s_i: `s_i[i]..s_i[i+1]` indices in `s_j` and `s_values` with the nonzero values for the i-th dense element
+            /// \param s_j: `s_j[i]` index of the position of the i-th nonzero value
+            /// \param s_values: `s_values[i]` value for the i-th nonzero value
+            /// \param s_from_rows: first dense coordinate of the sparse tensor to contract
+            /// \param s_from_cols: first sparse coordinate of the sparse tensor to contract
+            /// \param s_size_rows: number of elements in each dense direction of the sparse tensor to contract
+            /// \param s_size_cols: number of elements in each sparse direction of the sparse tensor to contract
+            /// \param x_N: number of dimensions of input dense tensor `X`
+            /// \param x_dim: number of elements of the input tensor in each direction
+            /// \param x_values: pointer to the values of the dense tensor
+            /// \param x_from: coordinates of first element of the subtensor of the dense tensor to contract
+            /// \param x_size: number of elements in each direction of the subtensor of the dense tensor to contract
+            /// \param y_N: number of dimensions of output dense tensor `Y`
+            /// \param y_dim: number of elements of the output tensor in each direction
+            /// \param y_values: pointer to the values of the output dense tensor
+            /// \param y_from: coordinates of first element of the subtensor of the dense output tensor
+            /// \param y_size: number of elements in each direction of the subtensor of the dense output tensor
+            /// \param p_ABT: permutation of the coordinates of sparse tensor (first all the sparse dimensions, then the dense dimensions)
+            ///           for having the form (A, B, T)
+            /// \param p_CBT: permutation of the dense input tensor coordinates to have the form (C, B, T)
+            /// \param p_ACT: permutation of the dense output tensor coordinates to have the form (A, C, T)
+
+            template <typename T, typename IndexType>
+            void sptensor_tensor_product(
+                int s_rows_N, const IndexType *SB_RESTRICT s_dim_rows, int s_cols_N,
+                const IndexType *SB_RESTRICT s_dim_cols, const IndexType *SB_RESTRICT s_i,
+                const IndexType *SB_RESTRICT s_j, const T *SB_RESTRICT s_values,
+                const IndexType *SB_RESTRICT s_from_rows, const IndexType *SB_RESTRICT s_from_cols,
+                const IndexType *SB_RESTRICT s_size_rows,
+                const IndexType *SB_RESTRICT s_size_cols, //
+                int x_N, const IndexType *SB_RESTRICT x_dim, const T *SB_RESTRICT x_values,
+                const IndexType *SB_RESTRICT x_from,
+                const IndexType *SB_RESTRICT x_size, //
+                int y_N, const IndexType *SB_RESTRICT y_dim, T *SB_RESTRICT y_values,
+                const IndexType *SB_RESTRICT y_from, const IndexType *SB_RESTRICT y_size, //
+                const IndexType *SB_RESTRICT p_ABT, const IndexType *SB_RESTRICT p_CBT,
+                const IndexType *SB_RESTRICT p_ACT, int NA, int NB, int NC, int NT, Cpu) {
+
+		// Preparation
+                std::vector<char> perm_index_rows;
+                std::vector<IndexType> perm_stride_rows;
+                std::vector<char> perm_index_x;
+                std::vector<IndexType> perm_stride_x;
+                std::vector<IndexType> perm_from_x;
+                std::vector<char> perm_index_y;
+                std::vector<IndexType> perm_stride_y;
+                std::vector<IndexType> perm_from_y;
+                IndexType vol_A_rows, vol_T_rows, vol_C;
+                std::tie(perm_index_rows, perm_stride_rows,        //
+                         perm_index_x, perm_stride_x, perm_from_x, //
+                         perm_index_y, perm_stride_y, perm_from_y, //
+                         vol_A_rows, vol_T_rows, vol_C) =
+                    sptensor_tensor_product_preparation(
+                        s_rows_N, s_dim_rows, s_cols_N, s_dim_cols, s_from_rows, s_from_cols,
+                        s_size_rows, s_size_cols, x_N, x_dim, x_from, x_size, y_N, y_dim, y_from,
+                        y_size, p_ABT, p_CBT, p_ACT, NA, NB, NC, NT);
+
+                // Deal with trivial cases
+                if ((s_rows_N == 0 && s_cols_N == 0) || x_N == 0 || y_N == 0 ||
+                    (s_rows_N > 0 && volume(s_rows_N, s_size_rows) == 0) ||
+                    (s_cols_N > 0 && volume(s_cols_N, s_size_cols) == 0) ||
+                    volume(x_N, x_size) == 0 || volume(y_N, y_size) == 0) {
+                    return;
+                }
+
+                const auto get_sp_row = [](int sp_N, const IndexType *sp_from,
+                                           const IndexType *sp_size, const IndexType *sp_dim,
+                                           const char *perm_index, const IndexType *perm_stride,
+                                           IndexType Ai, IndexType Ti) {
+                    IndexType row = 0;
+                    IndexType step = 1;
+                    for (int i = 0; i < sp_N; ++i) {
+                        IndexType coor_i =
+                            ((perm_index[i] == 0 ? Ai : Ti) / perm_stride[i]) % sp_size[i];
+                        row += ((coor_i + sp_from[i]) % sp_dim[i]) * step;
+                        step *= sp_dim[i];
+                    }
+                    return row;
+                };
+
+                const auto check_sp_col = [](IndexType abs_index, int sp_N,
+                                             const IndexType *sp_from, const IndexType *sp_size,
+                                             const IndexType *sp_dim) {
+                    IndexType step = 1;
+                    for (int i = 0; i < sp_N; ++i) {
+                        if ((abs_index / step - sp_from[i] + sp_dim[i]) % sp_dim[i] >= sp_size[i])
+                            return false;
+                        step *= sp_dim[i];
+                    }
+                    return true;
+                };
+
+                const auto get_x_index = [](int x_N, const IndexType *x_from,
+                                            const IndexType *x_size, const IndexType *x_dim,
+                                            const char *perm_index, const IndexType *perm_from,
+                                            const IndexType *perm_stride, IndexType Ci,
+                                            IndexType col, IndexType Trowsi) {
+                    IndexType index = 0;
+                    IndexType step = 1;
+                    for (int i = 0; i < x_N; ++i) {
+                        IndexType coor_i =
+                            ((perm_index[i] == 0 ? Ci : (perm_index[i] == 1 ? col : Trowsi)) /
+                                 perm_stride[i] +
+                             perm_from[i]) %
+                            x_size[i];
+                        index += ((coor_i + x_from[i]) % x_dim[i]) * step;
+                        step *= x_dim[i];
+                    }
+                    return index;
+                };
+
                 const auto get_y_index = [](int y_N, const IndexType *y_from,
                                             const IndexType *y_size, const IndexType *y_dim,
                                             const char *perm_index, const IndexType *perm_from,
@@ -386,11 +435,6 @@ namespace superbblas {
                 // ABT x CBT->ACT
                 // (rows, cols) x CBT->ACT
                 // rows in AT, cols in ABT
-                const auto vol_T_rows =
-                    NT == 0 ? 1 : volume(p_T_rows.size(), p_T_rows.data(), s_size_rows);
-                const auto vol_A_rows =
-                    NA == 0 ? 1 : volume(p_A_rows.size(), p_A_rows.data(), s_size_rows);
-                const auto vol_C = NC == 0 ? 1 : volume(NC, p_CBT, x_size);
 #ifdef _OPENMP
 #    pragma omp parallel for schedule(static) collapse(2)
 #endif
@@ -569,7 +613,7 @@ namespace superbblas {
 #    endif // SUPERBBLAS_GENERATE_KERNELS
 
             template <std::size_t N, typename T>
-            DECL_SPTENSOR_TENSOR_PRODUCT_GPU_N_T_IDX(void sptensor_tensor_product_gpu(
+            DECL_SPTENSOR_TENSOR_PRODUCT_GPU_N_T_IDX(void sptensor_tensor_product(
                 int s_rows_N, const IndexType *s_dim_rows, int s_cols_N,
                 const IndexType *s_dim_cols,
                 const IndexType *s_i, // device
@@ -585,7 +629,7 @@ namespace superbblas {
                 const IndexType *p_CBT, const IndexType *p_ACT, int NA, int NB, int NC, int NT,
                 Gpu xpu))
             IMPL({
-                if (std::max({s_rows_N, s_cols_N, x_N, y_N}) > N)
+                if ((std::size_t)std::max({s_rows_N, s_cols_N, x_N, y_N}) > N)
                     throw std::runtime_error("invalid input");
 
                 for (const auto &[Ni, size, dim] :
@@ -878,11 +922,22 @@ namespace superbblas {
             Coor<Nd> s_from_cols{{}};
             Coor<Nx> x_from{{}};
             Coor<Ny> y_from{{}};
-            aux_sptensor_tensor_product::sptensor_tensor_product(
-                ni, dimi.data(), nd, dimd.data(), vi.data(), vj.data(), va.data(),
-                s_from_rows.data(), s_from_cols.data(), dimi.data(), dimd.data(), nx, dimx.data(),
-                x, x_from.data(), dimx.data(), ny, dimy.data(), y, y_from.data(), dimy.data(),
-                p_ABT.data(), p_CBT.data(), p_ACT.data(), na, nb, nc, nt);
+            if constexpr (std::is_same<XPU, Cpu>::value) {
+                aux_sptensor_tensor_product::sptensor_tensor_product(
+                    ni, dimi.data(), nd, dimd.data(), vi.data(), vj.data(), va.data(),
+                    s_from_rows.data(), s_from_cols.data(), dimi.data(), dimd.data(), nx,
+                    dimx.data(), x, x_from.data(), dimx.data(), ny, dimy.data(), y, y_from.data(),
+                    dimy.data(), p_ABT.data(), p_CBT.data(), p_ACT.data(), na, nb, nc, nt,
+                    va.ctx());
+            } else {
+                constexpr auto N = multiple_of(std::max(std::max(Ni, Nd), std::max(Nx, Ny)), 4ul);
+                aux_sptensor_tensor_product::sptensor_tensor_product<N>(
+                    ni, dimi.data(), nd, dimd.data(), vi.data(), vj.data(), va.data(),
+                    s_from_rows.data(), s_from_cols.data(), dimi.data(), dimd.data(), nx,
+                    dimx.data(), x, x_from.data(), dimx.data(), ny, dimy.data(), y, y_from.data(),
+                    dimy.data(), p_ABT.data(), p_CBT.data(), p_ACT.data(), na, nb, nc, nt,
+                    va.ctx());
+            }
         }
     }
 }

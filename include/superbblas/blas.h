@@ -133,6 +133,15 @@ namespace superbblas {
             using type = T;
         };
 
+        /// Return the given number if it is multiple of the second number or the next multiple
+        /// \param n: number to try
+        /// \param base: multiple to try
+        /// \return: ceil(n/base)*base
+
+        template <typename T> constexpr T multiple_of(T n, T base) {
+            return (n + base - 1) / base * base;
+        }
+
 #ifdef SUPERBBLAS_USE_GPU
         /// Wait until everything finishes in the given stream
         /// \param xpu: context

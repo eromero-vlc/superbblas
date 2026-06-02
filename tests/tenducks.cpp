@@ -223,14 +223,26 @@ template <typename T, typename XPU> void test(const XPU xpu) {
                             const auto y_size = y_dim;
                             const auto alpha = T{1};
                             const auto beta = T{0};
-                            aux_sptensor_tensor_product::sptensor_tensor_product(
-                                a_rows_N, a_dim.data(), a_cols_N, a_dim.data() + a_rows_N,
-                                ai_xpu.data(), aj_xpu.data(), avalues_xpu.data(), a_from.data(),
-                                a_from.data() + a_rows_N, a_size.data(), a_size.data() + a_rows_N,
-                                x_N, x_dim.data(), x_xpu.data(), x_from.data(), x_size.data(), y_N,
-                                y_dim.data(), y_xpu.data(), y_from.data(), y_size.data(),
-                                p_ABT_c.data(), p_CBT.data(), p_ACT.data(), NA, NB, NC, NT);
-                            copy_n(y_xpu.data(), xpu, y_xpu.size(), y_values.data(), Cpu{});
+                            if constexpr (std::is_same<XPU, Cpu>::value) {
+                                aux_sptensor_tensor_product::sptensor_tensor_product(
+                                    a_rows_N, a_dim.data(), a_cols_N, a_dim.data() + a_rows_N,
+                                    ai_xpu.data(), aj_xpu.data(), avalues_xpu.data(), a_from.data(),
+                                    a_from.data() + a_rows_N, a_size.data(),
+                                    a_size.data() + a_rows_N, x_N, x_dim.data(), x_xpu.data(),
+                                    x_from.data(), x_size.data(), y_N, y_dim.data(), y_xpu.data(),
+                                    y_from.data(), y_size.data(), p_ABT_c.data(), p_CBT.data(),
+                                    p_ACT.data(), NA, NB, NC, NT, xpu);
+                            } else {
+                                aux_sptensor_tensor_product::sptensor_tensor_product<8>(
+                                    a_rows_N, a_dim.data(), a_cols_N, a_dim.data() + a_rows_N,
+                                    ai_xpu.data(), aj_xpu.data(), avalues_xpu.data(), a_from.data(),
+                                    a_from.data() + a_rows_N, a_size.data(),
+                                    a_size.data() + a_rows_N, x_N, x_dim.data(), x_xpu.data(),
+                                    x_from.data(), x_size.data(), y_N, y_dim.data(), y_xpu.data(),
+                                    y_from.data(), y_size.data(), p_ABT_c.data(), p_CBT.data(),
+                                    p_ACT.data(), NA, NB, NC, NT, xpu);
+                            }
+                            copy_n(y_xpu.data(), xpu, y_xpu.size(), y_values.data(), xpu);
 
                             std::vector<T> y_true_values(vol_y);
                             dense_tensor_product(alpha, a_dense_values.data(), x_values.data(),
