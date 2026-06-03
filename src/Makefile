@@ -20,6 +20,7 @@ OTHER_HEADERS := \
   ../include/superbblas/template.h \
   ../include/superbblas/template_types.h \
   ../include/superbblas/template_undef.h \
+  ../include/superbblas/tenducks.h \
   ../include/superbblas/tenfucks_cpu.h \
   ../include/superbblas/tenfucks_gpu.h \
   ../include/superbblas/tensor.h \

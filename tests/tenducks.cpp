@@ -242,7 +242,7 @@ template <typename T, typename XPU> void test(const XPU xpu) {
                                     y_from.data(), y_size.data(), p_ABT_c.data(), p_CBT.data(),
                                     p_ACT.data(), NA, NB, NC, NT, xpu);
                             }
-                            copy_n(y_xpu.data(), xpu, y_xpu.size(), y_values.data(), xpu);
+                            copy_n(y_xpu.data(), xpu, y_xpu.size(), y_values.data(), Cpu{});
 
                             std::vector<T> y_true_values(vol_y);
                             dense_tensor_product(alpha, a_dense_values.data(), x_values.data(),

@@ -7,6 +7,9 @@
 #define __SUPERBBLAS_TENDUCKS__
 
 #include "blas.h"
+#if defined(SUPERBBLAS_GENERATE_KERNELS) && defined(SUPERBBLAS_USE_CUDA)
+#    include <cuComplex.h>
+#endif
 
 #if defined(SUPERBBLAS_CREATING_LIB)
 #    define COOR_DIMS_MULT_4 1, 2, 3, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48
@@ -14,7 +17,9 @@
 /// Generate template instantiations for sptensor_tensor_product_gpu functions with template parameter N, T, IndexType
 
 #    define DECL_SPTENSOR_TENSOR_PRODUCT_GPU_N_T_IDX(...)                                          \
-        EMIT REPLACE1(sptensor_tensor_product, superbblas::detail::sptensor_tensor_product<N, T>)  \
+        EMIT REPLACE1(                                                                             \
+            sptensor_tensor_product,                                                               \
+            superbblas::detail::aux_sptensor_tensor_product::sptensor_tensor_product<N, T>)        \
             REPLACE_T REPLACE(N, COOR_DIMS_MULT_4) template __VA_ARGS__;
 
 #else
@@ -23,6 +28,38 @@
 
 namespace superbblas {
     namespace detail {
+
+        /// Replace std::complex by C complex
+        /// \tparam T: one of float, double, std::complex<T>
+        /// \return ccomplex<T>::type has the new type
+
+        template <typename T> struct cudacomplex {
+            using type = T;
+        };
+        template <> struct cudacomplex<std::complex<float>> {
+            using type = cuComplex;
+        };
+        template <> struct cudacomplex<std::complex<double>> {
+            using type = cuDoubleComplex;
+        };
+
+        template <> struct is_complex<cuComplex> {
+            static const bool value = true;
+        };
+        template <> struct is_complex<cuDoubleComplex> {
+            static const bool value = true;
+        };
+
+        template <typename T> struct real_type {
+            using type = T;
+        };
+        template <> struct real_type<cuComplex> {
+            using type = float;
+        };
+        template <> struct real_type<cuDoubleComplex> {
+            using type = double;
+        };
+
         namespace aux_sptensor_tensor_product {
             template <typename IndexType> IndexType volume(int N, const IndexType *dim) {
                 IndexType vol = 1;
@@ -74,10 +111,10 @@ namespace superbblas {
                 }
             }
 
-            std::tuple<std::vector<char>, std::vector<IndexType>,                         //
-                       std::vector<char>, std::vector<IndexType>, std::vector<IndexType>, //
-                       std::vector<char>, std::vector<IndexType>, std::vector<IndexType>, //
-                       IndexType, IndexType, IndexType>
+            inline std::tuple<std::vector<char>, std::vector<IndexType>,                         //
+                              std::vector<char>, std::vector<IndexType>, std::vector<IndexType>, //
+                              std::vector<char>, std::vector<IndexType>, std::vector<IndexType>, //
+                              IndexType, IndexType, IndexType>
             sptensor_tensor_product_preparation(
                 int s_rows_N, const IndexType *s_dim_rows, int s_cols_N,
                 const IndexType *s_dim_cols, const IndexType *s_from_rows,
@@ -347,8 +384,8 @@ namespace superbblas {
                 std::vector<IndexType> perm_from_y;
                 IndexType vol_A_rows, vol_T_rows, vol_C;
                 std::tie(perm_index_rows, perm_stride_rows,        //
-                         perm_index_x, perm_stride_x, perm_from_x, //
-                         perm_index_y, perm_stride_y, perm_from_y, //
+                         perm_index_x, perm_from_x, perm_stride_x, //
+                         perm_index_y, perm_from_y, perm_stride_y, //
                          vol_A_rows, vol_T_rows, vol_C) =
                     sptensor_tensor_product_preparation(
                         s_rows_N, s_dim_rows, s_cols_N, s_dim_cols, s_from_rows, s_from_cols,
@@ -607,7 +644,19 @@ namespace superbblas {
                         dev_get_y_index(p.y_N, p.y_from, p.y_size, p.y_dim, p.perm_index_y,
                                         p.perm_from_y, p.perm_stride_y, Arowsi, col, Ci, Trowsi);
 
+#        ifdef SUPERBBLAS_USE_CUDA
+                    if constexpr (!is_complex<T>::value) {
+                        y_values[yi] += s_values[ji] * x_values[xi];
+                    } else if constexpr (std::is_same<typename real_type<T>::type, float>::value) {
+                        y_values[yi] = cuCfmaf(s_values[ji], x_values[xi], y_values[yi]);
+                    } else if constexpr (std::is_same<typename real_type<T>::type, double>::value) {
+                        y_values[yi] = cuCfma(s_values[ji], x_values[xi], y_values[yi]);
+                    } else {
+                        static_assert(sizeof(T) == 0);
+                    }
+#        else
                     y_values[yi] += s_values[ji] * x_values[xi];
+#        endif
                 }
             }
 #    endif // SUPERBBLAS_GENERATE_KERNELS
@@ -632,18 +681,24 @@ namespace superbblas {
                 if ((std::size_t)std::max({s_rows_N, s_cols_N, x_N, y_N}) > N)
                     throw std::runtime_error("invalid input");
 
-                for (const auto &[Ni, size, dim] :
-                     std::array<std::tuple<int, const IndexType *, const IndexType *>, 4>{
-                         {{s_rows_N, s_size_rows, s_dim_rows},
-                          {s_cols_N, s_size_cols, s_dim_cols},
-                          {x_N, x_size, x_dim},
-                          {y_N, y_size, y_dim}}}) {
-                    for (int i = 0; i < Ni; ++i)
-                        if (size[i] > dim[i]) throw std::runtime_error("invalid input");
-                }
-                if (NA + NB + NT != s_rows_N + s_cols_N || NC + NB + NT != x_N ||
-                    NA + NC + NT != y_N)
-                    throw std::runtime_error("invalid input");
+		// Preparation
+                std::vector<char> perm_index_rows;
+                std::vector<IndexType> perm_stride_rows;
+                std::vector<char> perm_index_x;
+                std::vector<IndexType> perm_stride_x;
+                std::vector<IndexType> perm_from_x;
+                std::vector<char> perm_index_y;
+                std::vector<IndexType> perm_stride_y;
+                std::vector<IndexType> perm_from_y;
+                IndexType vol_A_rows, vol_T_rows, vol_C;
+                std::tie(perm_index_rows, perm_stride_rows,        //
+                         perm_index_x, perm_from_x, perm_stride_x, //
+                         perm_index_y, perm_from_y, perm_stride_y, //
+                         vol_A_rows, vol_T_rows, vol_C) =
+                    sptensor_tensor_product_preparation(
+                        s_rows_N, s_dim_rows, s_cols_N, s_dim_cols, s_from_rows, s_from_cols,
+                        s_size_rows, s_size_cols, x_N, x_dim, x_from, x_size, y_N, y_dim, y_from,
+                        y_size, p_ABT, p_CBT, p_ACT, NA, NB, NC, NT);
 
                 if ((s_rows_N == 0 && s_cols_N == 0) || x_N == 0 || y_N == 0 ||
                     (s_rows_N > 0 && volume(s_rows_N, s_size_rows) == 0) ||
@@ -651,174 +706,16 @@ namespace superbblas {
                     volume(x_N, x_size) == 0 || volume(y_N, y_size) == 0)
                     return;
 
-                // Find the volume for each part
-                std::vector<IndexType> size_B(NB);
-                copy_coor(NB, x_size, p_CBT + NC, size_B.data());
-                std::vector<IndexType> size_C(NC);
-                copy_coor(NC, x_size, p_CBT, size_C.data());
-                {
-                    std::vector<IndexType> size_A(NA);
-                    copy_coor(NA, y_size, p_ACT, size_A.data());
-                    std::vector<IndexType> size_T(NT);
-                    copy_coor(NT, x_size, p_CBT + NC + NB, size_T.data());
-                    std::vector<IndexType> s_size(s_rows_N + s_cols_N);
-                    copy_coor(s_rows_N, s_size_rows, s_size.data());
-                    copy_coor(s_cols_N, s_size_cols, s_size.data() + s_rows_N);
-                    if (!is_compatible(NA, p_ABT, s_size.data(), size_A.data()))
-                        throw std::runtime_error("invalid input");
-                    if (!is_compatible(NB, p_ABT + NA, s_size.data(), size_B.data()))
-                        throw std::runtime_error("invalid input");
-                    if (!is_compatible(NT, p_ABT + NA + NB, s_size.data(), size_T.data()))
-                        throw std::runtime_error("invalid input");
-                    if (!is_compatible(NT, p_CBT + NC + NB, x_size, size_T.data()))
-                        throw std::runtime_error("invalid input");
-                    if (!is_compatible(NC, p_ACT + NA, y_size, size_C.data()))
-                        throw std::runtime_error("invalid input");
-                    if (!is_compatible(NT, p_ACT + NA + NC, y_size, size_T.data()))
-                        throw std::runtime_error("invalid input");
-                }
-
-                std::vector<IndexType> p_A_rows, p_A_cols;
-                for (int i = 0; i < NA; ++i) {
-                    if (p_ABT[i] < s_rows_N)
-                        p_A_rows.push_back(p_ABT[i]);
-                    else
-                        p_A_cols.push_back(p_ABT[i] - s_rows_N);
-                }
-                for (int i = 0; i < NB; ++i) {
-                    if (p_ABT[NA + i] < s_rows_N) {
-                        // FIXME: support "a" row coors in B
-                        throw std::runtime_error("unsupported");
-                    }
-                }
-                std::vector<IndexType> p_T_rows, p_T_cols;
-                for (int i = 0; i < NT; ++i) {
-                    if (p_ABT[NA + NB + i] < s_rows_N)
-                        p_T_rows.push_back(p_ABT[NA + NB + i]);
-                    else
-                        p_T_cols.push_back(p_ABT[NA + NB + i] - s_rows_N);
-                }
-
-                std::vector<IndexType> stride_A_rows(p_A_rows.size());
-                copy_stride(p_A_rows.size(), s_size_rows, p_A_rows.data(), stride_A_rows.data());
-                std::vector<IndexType> stride_s_dim_cols(s_cols_N);
-                copy_stride(s_cols_N, s_dim_cols, stride_s_dim_cols.data());
-                std::vector<IndexType> stride_C(NC);
-                copy_stride(NC, size_C.data(), stride_C.data());
-                std::vector<IndexType> stride_T_rows(p_T_rows.size());
-                copy_stride(p_T_rows.size(), s_size_rows, p_T_rows.data(), stride_T_rows.data());
-                std::vector<IndexType> stride_s_rows(s_rows_N);
-                copy_stride(s_rows_N, s_size_rows, stride_s_rows.data());
-
-                // perm_stride_rows / perm_index_rows
-                std::vector<IndexType> perm_stride_rows(s_rows_N);
-                std::vector<char> perm_index_rows(s_rows_N);
-                for (int i = 0; i < s_rows_N; ++i) {
-                    const std::size_t j =
-                        std::find(p_A_rows.begin(), p_A_rows.end(), i) - p_A_rows.begin();
-                    if (j < p_A_rows.size()) {
-                        perm_stride_rows.at(i) = stride_A_rows.at(j);
-                        perm_index_rows.at(i) = 0;
-                    } else {
-                        const auto j =
-                            std::find(p_T_rows.begin(), p_T_rows.end(), i) - p_T_rows.begin();
-                        perm_stride_rows.at(i) = stride_T_rows.at(j);
-                        perm_index_rows.at(i) = 1;
-                    }
-                }
-
-                // perm for x
-                std::vector<IndexType> perm_stride_x(x_N), perm_from_x(x_N);
-                std::vector<char> perm_index_x(x_N);
-                for (int i = 0; i < x_N; ++i) {
-                    const int j = std::find(p_CBT, p_CBT + x_N, i) - p_CBT;
-                    if (j < NC) {
-                        perm_from_x.at(i) = 0;
-                        perm_stride_x.at(i) = stride_C.at(j);
-                        perm_index_x.at(i) = 0;
-                    } else if (j - NC < NB) {
-                        if (p_ABT[NA + j - NC] < s_rows_N) throw std::runtime_error("unsupported");
-                        const auto js_cols = p_ABT[NA + j - NC] - s_rows_N;
-                        perm_from_x.at(i) =
-                            (s_dim_cols[js_cols] - s_from_cols[js_cols]) % s_dim_cols[js_cols];
-                        perm_stride_x.at(i) = stride_s_dim_cols.at(js_cols);
-                        perm_index_x.at(i) = 1;
-                    } else if (j - NC - NB < NT) {
-                        const std::size_t ja = std::find(p_T_rows.begin(), p_T_rows.end(),
-                                                         p_ABT[NA + NB + j - NC - NB]) -
-                                               p_T_rows.begin();
-                        if (ja < p_T_rows.size()) {
-                            perm_from_x.at(i) = 0;
-                            perm_stride_x.at(i) = stride_T_rows.at(ja);
-                            perm_index_x.at(i) = 2;
-                        } else {
-                            const auto js_cols = p_ABT[NA + NB + j - NC - NB] - s_rows_N;
-                            perm_from_x.at(i) =
-                                (s_dim_cols[js_cols] - s_from_cols[js_cols]) % s_dim_cols[js_cols];
-                            perm_stride_x.at(i) = stride_s_dim_cols.at(js_cols);
-                            perm_index_x.at(i) = 1;
-                        }
-                    }
-                }
-
-                // perm for y
-                std::vector<IndexType> perm_stride_y(y_N), perm_from_y(y_N);
-                std::vector<char> perm_index_y(y_N);
-                for (int i = 0; i < y_N; ++i) {
-                    const int j = std::find(p_ACT, p_ACT + y_N, i) - p_ACT;
-                    if (j < NA) {
-                        const std::size_t ja =
-                            std::find(p_A_rows.begin(), p_A_rows.end(), p_ABT[j]) -
-                            p_A_rows.begin();
-                        if (ja < p_A_rows.size()) {
-                            perm_from_y.at(i) = 0;
-                            perm_stride_y.at(i) = stride_A_rows.at(ja);
-                            perm_index_y.at(i) = 0;
-                        } else {
-                            const auto js_cols = p_ABT[j] - s_rows_N;
-                            perm_from_y.at(i) =
-                                (s_dim_cols[js_cols] - s_from_cols[js_cols]) % s_dim_cols[js_cols];
-                            perm_stride_y.at(i) = stride_s_dim_cols.at(js_cols);
-                            perm_index_y.at(i) = 1;
-                        }
-                    } else if (j - NA < NC) {
-                        perm_from_y.at(i) = 0;
-                        perm_stride_y.at(i) = stride_C.at(j - NA);
-                        perm_index_y.at(i) = 2;
-                    } else if (j - NA - NC < NT) {
-                        const std::size_t ja = std::find(p_T_rows.begin(), p_T_rows.end(),
-                                                         p_ABT[NA + NB + j - NA - NC]) -
-                                               p_T_rows.begin();
-                        if (ja < p_T_rows.size()) {
-                            perm_from_y.at(i) = 0;
-                            perm_stride_y.at(i) = stride_T_rows.at(ja);
-                            perm_index_y.at(i) = 3;
-                        } else {
-                            const auto js_cols = p_ABT[NA + NB + j - NA - NC] - s_rows_N;
-                            perm_from_y.at(i) =
-                                (s_dim_cols[js_cols] - s_from_cols[js_cols]) % s_dim_cols[js_cols];
-                            perm_stride_y.at(i) = stride_s_dim_cols.at(js_cols);
-                            perm_index_y.at(i) = 1;
-                        }
-                    }
-                }
-
-                const IndexType vol_T_rows =
-                    NT == 0 ? 1 : volume(p_T_rows.size(), p_T_rows.data(), s_size_rows);
-                const IndexType vol_A_rows =
-                    NA == 0 ? 1 : volume(p_A_rows.size(), p_A_rows.data(), s_size_rows);
-                const IndexType vol_C_val = NC == 0 ? 1 : volume(NC, p_CBT, x_size);
-
                 BSRExtKernelParams<N, IndexType> kp{};
                 kp.vol_T_rows = vol_T_rows;
                 kp.vol_A_rows = vol_A_rows;
-                kp.vol_C = vol_C_val;
+                kp.vol_C = vol_C;
                 kp.s_rows_N = s_rows_N;
                 kp.s_cols_N = s_cols_N;
                 kp.x_N = x_N;
                 kp.y_N = y_N;
 
-                // Copy small arrays into the fixed-size fields (max 8 dims each)
+                // Copy small arrays into the fixed-size fields
                 std::copy_n(s_from_rows, s_rows_N, kp.s_from_rows);
                 std::copy_n(s_size_rows, s_rows_N, kp.s_size_rows);
                 std::copy_n(s_dim_rows, s_rows_N, kp.s_dim_rows);
@@ -841,11 +738,15 @@ namespace superbblas {
                 std::copy_n(perm_stride_y.data(), y_N, kp.perm_stride_y);
 
                 // Launch kernel
-                const IndexType total_threads = vol_T_rows * vol_A_rows * vol_C_val;
+                const IndexType total_threads = vol_T_rows * vol_A_rows * vol_C;
                 const int block_size = 256;
                 const int grid_size = (int)((total_threads + block_size - 1) / block_size);
 
+#    ifdef SUPERBBLAS_USE_CUDA
+                using Tc = typename cudacomplex<T>::type;
+#    else
                 using Tc = typename superbblas::detail::ccomplex<T>::type;
+#    endif
                 setDevice(xpu);
                 sptensor_tensor_product_kernel<N, Tc, IndexType>
                     <<<grid_size, block_size, 0, getStream(xpu)>>>(
