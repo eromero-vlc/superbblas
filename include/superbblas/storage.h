@@ -1336,6 +1336,7 @@ namespace superbblas {
                   const Components_tmpl<Nd1, Q, XPU0, XPU1> &v1, EWOP, CoorOrder co,
                   const Comm &comm) {
 
+            (void)comm;
             tracker<XPU1> _t("load", Cpu{});
 
             // Turn o0, from0, and size0 into SlowToFast

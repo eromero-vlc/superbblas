@@ -29,6 +29,7 @@
 namespace superbblas {
     namespace detail {
 
+#ifdef SUPERBBLAS_USE_CUDA
         /// Replace std::complex by C complex
         /// \tparam T: one of float, double, std::complex<T>
         /// \return ccomplex<T>::type has the new type
@@ -59,6 +60,7 @@ namespace superbblas {
         template <> struct real_type<cuDoubleComplex> {
             using type = double;
         };
+#endif // SUPERBBLAS_USE_CUDA
 
         namespace aux_sptensor_tensor_product {
             template <typename IndexType> IndexType volume(int N, const IndexType *dim) {

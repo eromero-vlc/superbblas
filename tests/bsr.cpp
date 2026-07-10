@@ -777,7 +777,7 @@ void test(Coor<Nd> dim, Coor<Nd> procs, int rank, int nprocs, int max_power, uns
                   << " threads" << std::endl;
 
     if (rank == 0) {
-        std::size_t vol1 = detail::volume(p1[0][1]);
+        std::size_t vol1 = superbblas::detail::volume(p1[0][1]);
         std::cout << "Maximum number of elements in a tested tensor per component: " << vol1
                   << " ( " << vol1 * 1.0 * sizeof(Q) / 1024 / 1024 << " MiB)" << std::endl;
     }
@@ -937,7 +937,7 @@ int main(int argc, char **argv) {
                           << std::endl;
                 return -1;
             }
-            if (detail::volume(procs) != (std::size_t)nprocs) {
+            if (superbblas::detail::volume(procs) != (std::size_t)nprocs) {
                 std::cerr << "The total number of processes set by the option `--procs=` should "
                              "match the number of processes"
                           << std::endl;

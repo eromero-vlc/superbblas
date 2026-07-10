@@ -787,8 +787,8 @@ namespace superbblas {
                     std::size_t num_blocks = kron_cpu.size() / ki / kd;
                     vector<int, Cpu> kron_perm_cpu(kd * num_blocks, Cpu{});
                     vector<T, Cpu> kron_scalars_cpu(kd * num_blocks, Cpu{});
-                    for (int i = 0; i < kd * num_blocks; ++i) kron_perm_cpu[i] = 0;
-                    for (int i = 0; i < kd * num_blocks; ++i) kron_scalars_cpu[i] = T{0};
+                    for (unsigned int i = 0; i < kd * num_blocks; ++i) kron_perm_cpu[i] = 0;
+                    for (unsigned int i = 0; i < kd * num_blocks; ++i) kron_scalars_cpu[i] = T{0};
                     int ldr = (v.blockImFast ? 1 : kd);
                     int ldc = (v.blockImFast ? ki : 1);
                     for (std::size_t blk = 0; blk < num_blocks; blk++) {

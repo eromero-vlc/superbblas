@@ -21,7 +21,7 @@ endif
 #
 CXX ?= c++
 ifndef MKLROOT
-  BLAS_LDFLAGS ?= -lopenblas -DSUPERBBLAS_USE_CBLAS
+  BLAS_LDFLAGS ?= $(shell  pkg-config openblas --libs ) -DSUPERBBLAS_USE_CBLAS
 else
   BLAS_FLAGS ?= -I${MKLROOT}/include -DSUPERBBLAS_USE_MKL
   BLAS_LDFLAGS ?= -L${MKLROOT}/lib/intel64 -lmkl_rt -lpthread -lm -ldl
@@ -29,7 +29,7 @@ endif
 
 
 #CXXFLAGS ?= -g -O0 -Wall -Wextra -fopenmp $(MPISBFLAG) $(BLAS_FLAGS) $(AFSFLAGS)
-CXXFLAGS ?= -Ofast -march=native -DNDEBUG -Wall -Wextra -fopenmp $(MPISBFLAG) $(BLAS_FLAGS) $(AFSFLAGS)
+CXXFLAGS ?= -O3 -ffast-math -march=native -DNDEBUG -Wall -Wextra -fopenmp $(MPISBFLAG) $(BLAS_FLAGS) $(AFSFLAGS)
 LDFLAGS ?= $(BLAS_LDFLAGS)
 
 #
@@ -48,7 +48,7 @@ PRIM ?=
 THRUST ?= 
 HIP ?= $(shell which hipcc)
 ROCMDIR ?= $(shell hipconfig -R)
-HIPFLAGS ?= $(shell hipconfig -C) -I$(ROCMDIR)/include -I$(PRIM) -I$(THRUST) -std=c++14
+HIPFLAGS ?= $(shell hipconfig -C) -I$(ROCMDIR)/include -I$(PRIM) -I$(THRUST)
 HIPLDFLAGS ?= -L$(ROCMDIR)/lib -lrocsolver -lhipsparse -lhipblas -lrocblas -lamdhip64
 
 #

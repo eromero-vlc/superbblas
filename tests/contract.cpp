@@ -46,7 +46,7 @@ Operator<NA + NB + NC, T> generate_tensor(char a, char b, char c, const std::map
     for (std::size_t i = 0; i < NA; ++i) dim[i] = dims.at(a);
     for (std::size_t i = 0; i < NB; ++i) dim[i + NA] = dims.at(b);
     for (std::size_t i = 0; i < NC; ++i) dim[i + NA + NB] = dims.at(c);
-    std::size_t vol = detail::volume(dim);
+    std::size_t vol = superbblas::detail::volume(dim);
     std::vector<T> v(vol);
     for (std::size_t i = 0; i < vol; ++i) v[i] = make_complex<T>(i, i);
     Order<N> o{};
@@ -112,7 +112,8 @@ vectors<T, XPU> create_tensor_data(const PartitionStored<N> &p, int rank,
         r.push_back(v);
         if (init_to_ones) {
             std::vector<T> v_cpu(vol, T{1});
-            detail::copy_n(v_cpu.data(), detail::Cpu{}, vol, v.data(), v.ctx());
+            superbblas::detail::copy_n(v_cpu.data(), superbblas::detail::Cpu{}, vol, v.data(),
+                                       v.ctx());
         }
     }
     return vectors<T, XPU>(r);
@@ -224,7 +225,7 @@ void test_contraction(const T &alpha, Operator<N0, T> op0, distribution d0, Oper
     // Move the result to proc 0
     PartitionStored<N2> pr(nprocs, {{{{}}, {{}}}});
     pr[0][1] = size2; // tensor only supported on proc 0
-    std::vector<T> vr(detail::volume(pr[rank][1]));
+    std::vector<T> vr(superbblas::detail::volume(pr[rank][1]));
     T *ptrvr = vr.data();
     copy(1, p2.data(), ctx.size(), o2.data(), from2, size2, dim2, v2.const_data(), nullptr,
          ctx.data(), pr.data(), 1, o2.data(), {{}}, size2, &ptrvr, nullptr, &cpu,
@@ -286,20 +287,20 @@ void test_contraction(const T &alpha, Operator<N0, T> p0, Operator<N1, T> p1, co
     const Order<N2> o2 = std::get<1>(p2);
     const std::vector<T> v0 = std::get<2>(p0);
     const std::vector<T> v1 = std::get<2>(p1);
-    std::vector<T> r0(detail::volume(dim2)); // p0 not conj, and p1 not conj
-    std::vector<T> r1(detail::volume(dim2)); // p0 conj, and p1 not conj
-    std::vector<T> r2(detail::volume(dim2)); // p0 not conj, and p1 conj
-    std::vector<T> r3(detail::volume(dim2)); // p0 conj, and p1 conj
-    Coor<N0> strides0 = detail::get_strides<IndexType>(dim0, SlowToFast);
-    Coor<N1> strides1 = detail::get_strides<IndexType>(dim1, SlowToFast);
-    Coor<N2> strides2 = detail::get_strides<IndexType>(dim2, SlowToFast);
-    for (std::size_t i = 0, m = detail::volume(dim0); i < m; ++i) {
+    std::vector<T> r0(superbblas::detail::volume(dim2)); // p0 not conj, and p1 not conj
+    std::vector<T> r1(superbblas::detail::volume(dim2)); // p0 conj, and p1 not conj
+    std::vector<T> r2(superbblas::detail::volume(dim2)); // p0 not conj, and p1 conj
+    std::vector<T> r3(superbblas::detail::volume(dim2)); // p0 conj, and p1 conj
+    Coor<N0> strides0 = superbblas::detail::get_strides<IndexType>(dim0, SlowToFast);
+    Coor<N1> strides1 = superbblas::detail::get_strides<IndexType>(dim1, SlowToFast);
+    Coor<N2> strides2 = superbblas::detail::get_strides<IndexType>(dim2, SlowToFast);
+    for (std::size_t i = 0, m = superbblas::detail::volume(dim0); i < m; ++i) {
         std::vector<int> dim(128, -1);
-        Coor<N0> c0 = detail::index2coor((IndexType)i, dim0, strides0);
+        Coor<N0> c0 = superbblas::detail::index2coor((IndexType)i, dim0, strides0);
         for (std::size_t d = 0; d < N0; ++d) dim[o0[d]] = c0[d];
-        for (std::size_t j = 0, n = detail::volume(dim1); j < n; ++j) {
+        for (std::size_t j = 0, n = superbblas::detail::volume(dim1); j < n; ++j) {
             std::vector<int> dim_ = dim;
-            Coor<N1> c1 = detail::index2coor((IndexType)j, dim1, strides1);
+            Coor<N1> c1 = superbblas::detail::index2coor((IndexType)j, dim1, strides1);
             bool get_out = false;
             for (std::size_t d = 0; d < N1; ++d) {
                 if (dim_[o1[d]] == -1)
@@ -312,7 +313,7 @@ void test_contraction(const T &alpha, Operator<N0, T> p0, Operator<N1, T> p1, co
             if (get_out) continue;
             Coor<N2> c2{};
             for (std::size_t d = 0; d < N2; ++d) c2[d] = dim_[o2[d]];
-            IndexType k = detail::coor2index(c2, dim2, strides2);
+            IndexType k = superbblas::detail::coor2index(c2, dim2, strides2);
             r0[k] += v0[i] * v1[j];
             r1[k] += conj(v0[i]) * v1[j];
             r2[k] += v0[i] * conj(v1[j]);
