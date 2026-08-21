@@ -404,16 +404,18 @@ namespace superbblas {
             static dim3 grid_size(int, int) { return dim3(0, 0, 0); }
         };
 
-        template <typename T> __global__ void bsr_kron_3x3_4x4perm_kernel_available(int *flag) {
+        template <typename T>
+        inline __global__ void bsr_kron_3x3_4x4perm_kernel_available(int *flag) {
             *flag = 0;
         }
 
         template <typename T>
-        __global__ void bsr_kron_3x3_4x4perm_kernel_fun(
-            const typename the_real<T>::type * SB_RESTRICT a, int a_ldr, int a_ldc, int * SB_RESTRICT jj, int block_rows,
-            int num_dirs, const typename the_real<T>::type * SB_RESTRICT perm_scalars, const int * SB_RESTRICT perm,
-            const typename the_real<T>::type * SB_RESTRICT x, int ldx, typename the_real<T>::type * SB_RESTRICT y, int ldy,
-            int ncols) {
+        inline __global__ void bsr_kron_3x3_4x4perm_kernel_fun(
+            const typename the_real<T>::type *SB_RESTRICT a, int a_ldr, int a_ldc,
+            int *SB_RESTRICT jj, int block_rows, int num_dirs,
+            const typename the_real<T>::type *SB_RESTRICT perm_scalars, const int *SB_RESTRICT perm,
+            const typename the_real<T>::type *SB_RESTRICT x, int ldx,
+            typename the_real<T>::type *SB_RESTRICT y, int ldy, int ncols) {
             (void)a;
             (void)a_ldr;
             (void)a_ldc;
@@ -444,7 +446,7 @@ namespace superbblas {
         };
 
         template <>
-        __global__ void
+        inline __global__ void
         bsr_kron_3x3_4x4perm_kernel_available<std::complex<double>>(int *flag) {
 #        if defined(SUPERBBLAS_CUDA_SUPPORTS_TENSOR_CORES_FOR_DOUBLES)
             *flag = 1;
@@ -479,7 +481,7 @@ namespace superbblas {
 	/// - {d(i/4,(i%4)*2), d(i/4,(i%4)*2+1)}
 
         template <>
-        __global__ void bsr_kron_3x3_4x4perm_kernel_fun<std::complex<double>>(
+        inline __global__ void bsr_kron_3x3_4x4perm_kernel_fun<std::complex<double>>(
             const double *SB_RESTRICT a, int a_ldr, int a_ldc, int *SB_RESTRICT jj, int block_rows,
             int num_dirs, const double *SB_RESTRICT perm_scalars, const int *SB_RESTRICT perm,
             const double *SB_RESTRICT x, int ldx, double *SB_RESTRICT y, int ldy, int ncols) {
