@@ -213,10 +213,12 @@ int main(int, char **) {
     {
         Context ctx = createGpuContext(0);
         test_gpu<std::complex<double>>(ctx.toGpu(0));
+#    ifdef SUPERBBLAS_USE_CUDA
         test_inner_prod_gpu<float>(ctx.toGpu(0));
         test_inner_prod_gpu<double>(ctx.toGpu(0));
         test_inner_prod_gpu<std::complex<float>>(ctx.toGpu(0));
         test_inner_prod_gpu<std::complex<double>>(ctx.toGpu(0));
+#    endif
     }
 #endif
 
