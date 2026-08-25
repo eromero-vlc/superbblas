@@ -738,6 +738,12 @@ namespace superbblas {
             if (p.size() != comm.nprocs) throw std::runtime_error("wtf");
         }
 
+        struct comm_pattern {
+            enum pattern_type { alltoall, broadcast, reduce, allreduce };
+            pattern_type pattern;
+            int sender_or_receiver;
+        };
+
 #ifdef SUPERBBLAS_USE_MPI
         /// Communication barrier
 
@@ -1623,12 +1629,6 @@ namespace superbblas {
             return {{{}, c}, v};
         }
 #    endif // SUPERBBLAS_USE_GPU
-
-        struct comm_pattern {
-            enum pattern_type { alltoall, broadcast, reduce, allreduce };
-            pattern_type pattern;
-            int sender_or_receiver;
-        };
 
         template <typename XPUbuff, std::size_t Nd0, std::size_t Nd1, typename T, typename Q,
                   typename XPU0, typename XPU1, typename EWOP>
