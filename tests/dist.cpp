@@ -324,8 +324,6 @@ void test(Coor<Nd> dim, Coor<Nd> procs, int rank, int nprocs, const std::vector<
         if (rank == 0) reportCacheUsage(std::cout);
     }
 
-	return; /// temp!
-
     // Copy tensor t0 into each of the c components of tensor 1 in double
     {
         tensor<Nd - 1, Scalar, XPU> t0({X, Y, Z, T, S, C}, dim, procs, nprocs, rank, xpu);
@@ -386,6 +384,34 @@ void test(Coor<Nd> dim, Coor<Nd> procs, int rank, int nprocs, const std::vector<
         if (rank == 0) std::cout << "Time in shifting " << t / nrep << std::endl;
     }
 
+    // Global reduction on C
+    {
+        // Create tensor t1 of Nd dims: several lattice color vectors forming a matrix
+        const auto &repl = superbblas::detail::ones<Nd>();
+        tensor<Nd, Scalar, XPU> t1(Labels<Nd>{T, N, S, X, Y, Z, C}, dim, repl, nprocs, rank, xpu);
+        tensor<Nd, Scalar, XPU> t2(Labels<Nd>{T, N, S, X, Y, Z, C}, dim, repl, nprocs, rank, xpu);
+        dummyFill(t1);
+
+        double t = 0;
+        for (unsigned int rep = 0; rep <= nrep; ++rep) {
+            if (rep == 1) {
+                sync(xpu);
+                t = w_time();
+            }
+            const Coor<Nd> from0 = {{}};
+            copy(1.0, t1.p.data(), ctx.size(), t1.order.data(), from0, t1.dim, t1.dim,
+                 (const Scalar **)t1.data(), nullptr, ctx.data(), t2.p.data(), ctx.size(),
+                 t2.order.data(), from0, t2.dim, t2.data(), nullptr, ctx.data(),
+#ifdef SUPERBBLAS_USE_MPI
+                 MPI_COMM_WORLD,
+#endif
+                 SlowToFast, Add);
+        }
+        sync(xpu);
+        t = w_time() - t;
+        if (rank == 0) std::cout << "Time in allreduce " << t / nrep << std::endl;
+    }
+
     {
         tensor<Nd, Scalar, XPU> t1(Labels<Nd>{T, S, X, Y, Z, C, N}, dim, procs, nprocs, rank,
                                    std::vector<XPU>(1, xpu.at(0)));
@@ -414,7 +440,7 @@ void test(Coor<Nd> dim, Coor<Nd> procs, int rank, int nprocs, const std::vector<
     }
 
     // Create tensor t3 of 5 dims
-    {
+     {
         // Create tensor t1 of Nd dims: several lattice color vectors forming a matrix
         tensor<Nd, Scalar, XPU> t1(Labels<Nd>{T, N, S, X, Y, Z, C}, dim, procs, nprocs, rank, xpu);
         tensor<Nd, Scalar, XPU> t2(Labels<Nd>{T, N, S, X, Y, Z, C}, dim, procs, nprocs, rank, xpu);
@@ -610,7 +636,7 @@ int main(int argc, char **argv) {
                           << std::endl;
                 return -1;
             }
-            if (detail::volume(procs) != (std::size_t)nprocs) {
+            if (superbblas::detail::volume(procs) != (std::size_t)nprocs) {
                 std::cerr << "The total number of processes set by the option `--procs=` should "
                              "match the number of processes"
                           << std::endl;
@@ -679,8 +705,12 @@ int main(int argc, char **argv) {
     }
 #ifdef SUPERBBLAS_USE_GPU
     {
-        Context ctx = createGpuContext(rank % getGpuDevicesCount());
-        test(dim, procs, rank, nprocs, ctx, ctx.toGpu(0), nrep);
+        std::vector<Context> ctx;
+        for (int i = 0; i < ncomponents; ++i)
+            ctx.push_back(createGpuContext(rank % getGpuDevicesCount()));
+        std::vector<Gpu> xpus;
+        for (const auto &i : ctx) xpus.push_back(i.toGpu(0));
+        test(dim, procs, rank, nprocs, ctx, xpus, nrep);
         clearCaches();
         checkForMemoryLeaks(std::cout);
     }
