@@ -315,6 +315,14 @@ namespace superbblas {
             AnyLayoutForXAndY    ///< X and Y can be either way
         };
 
+        /// Constrain what operator() to use for BSR
+
+        enum BSRAllowedOperator {
+            Both,      ///< allowed both operator() functions
+            LowLevel,  ///< only allowed the low level
+            HighLevel, ///< only allowed the high level
+        };
+
         /// Flavor of the jj values, used by get_bsr_indices
 
         enum ReturnJJ {
@@ -537,6 +545,7 @@ namespace superbblas {
 
             SpMMAllowedLayout allowLayout;
             static const MatrixLayout preferredLayout = RowMajor;
+            BSRAllowedOperator allowedOperator;
 
             BSR(const BSRComponent<Nd, Ni, T, Cpu> &v) : v(v) {
                 allowLayout = (v.kron_it.size() > 0) ? SameLayoutForXAndY : AnyLayoutForXAndY;
@@ -549,6 +558,7 @@ namespace superbblas {
                     kron =
                         CSRs<IndexType, T>(v.kron_it, volume(v.kroni), volume(v.krond),
                                            num_nnz_per_row, v.blockImFast ? ColumnMajor : RowMajor);
+                allowedOperator = v.kron_it.size() > 0 ? LowLevel : Both;
             }
 
             /// Return the number of flops for a given number of right-hand-sides
@@ -609,6 +619,8 @@ namespace superbblas {
                             vector<T, Cpu> &vy, IndexType ldy, MatrixLayout ly,
                             IndexType ncols) const {
                 const T alpha{1};
+                if (allowedOperator == HighLevel) throw std::runtime_error("Not implemented");
+
                 if (conjA) throw std::runtime_error("Not implemented");
                 if (v.kron_it.size() > 0 && lx != ly) throw std::runtime_error("Not implemented");
                 IndexType bi = volume(v.blocki);
@@ -718,6 +730,7 @@ namespace superbblas {
             void operator()(const Order<Ni> &oim, const Order<Nd> &odm, const Coor<Nx> &dimx,
                             const Order<Nx> &ox, const vector<T, Cpu> &vx, const Coor<Ny> &dimy,
                             const Order<Ny> &oy, vector<T, Cpu> &vy) const {
+                if (allowedOperator == LowLevel) throw std::runtime_error("Not implemented");
                 if (v.kron_it.size() > 0) throw std::runtime_error("Not implemented");
 
                 std::size_t ni, nd, nx, ny;
@@ -757,6 +770,7 @@ namespace superbblas {
 
             SpMMAllowedLayout allowLayout;
             MatrixLayout preferredLayout;
+            BSRAllowedOperator allowedOperator;
             std::string implementation_;
             const std::string &implementation() const { return implementation_; }
 
@@ -775,6 +789,7 @@ namespace superbblas {
 #    ifdef SUPERBBLAS_USE_GPU
                 if (is_kron) {
                     kron_use_crafted_kernel = true;
+                    allowedOperator = LowLevel;
                     std::size_t ki = volume(v.kroni);
                     std::size_t kd = volume(v.krond);
                     std::size_t block_size = volume(v.blocki);
@@ -861,7 +876,15 @@ namespace superbblas {
                 num_nnz_per_row = bsr.num_nnz_per_row;
 
 #    ifdef SUPERBBLAS_USE_CUDA
-                if (!kron_use_crafted_kernel) {
+                const IndexType num_cols = volume(v.dimd);
+                const IndexType num_rows = volume(v.dimi);
+                if (!kron_use_crafted_kernel && num_cols < num_nnz_per_row) {
+                    implementation_ = "custom_csr";
+                    allowLayout = AnyLayoutForXAndY;
+                    preferredLayout = Any;
+                    allowedOperator = HighLevel;
+                } else if (!kron_use_crafted_kernel) {
+                    allowedOperator = Both;
                     IndexType block_size = volume(v.blocki);
                     cudaDeviceProp prop;
                     gpuCheck(cudaGetDeviceProperties(&prop, deviceId(v.it.ctx())));
@@ -894,8 +917,6 @@ namespace superbblas {
                     } else {
                         static_assert(sizeof(IndexType) == 4,
                                       "unsupported integer other than 32 bits");
-                        IndexType num_cols = volume(v.dimd);
-                        IndexType num_rows = volume(v.dimi);
                         IndexType ki = volume(v.kroni);
                         IndexType kd = volume(v.krond);
                         descrA_other = std::shared_ptr<cusparseSpMatDescr_t>(
@@ -925,6 +946,7 @@ namespace superbblas {
                     implementation_ = "cuda_mmfa";
                     allowLayout = RowMajorForXandY;
                     preferredLayout = RowMajor;
+                    allowedOperator = LowLevel;
                 }
 #    else
                 if (bsr.j_has_negative_indices)
@@ -935,6 +957,7 @@ namespace superbblas {
                     implementation_ = "hipsparse_bsr";
                     allowLayout = ColumnMajorForY;
                     preferredLayout = !is_kron ? RowMajor : ColumnMajor;
+                    allowedOperator = !is_kron ? Both : LowLevel;
                     descrA_bsr = std::shared_ptr<hipsparseMatDescr_t>(
                         new hipsparseMatDescr_t, [](hipsparseMatDescr_t *p) {
                             hipsparseDestroyMatDescr(*p);
@@ -945,6 +968,7 @@ namespace superbblas {
                         hipsparseSetMatIndexBase(*descrA_bsr, HIPSPARSE_INDEX_BASE_ZERO));
                     gpuSparseCheck(hipsparseSetMatType(*descrA_bsr, HIPSPARSE_MATRIX_TYPE_GENERAL));
                 } else {
+                    allowedOperator = LowLevel;
                     implementation_ = "rocm_mmfa";
                     allowLayout = RowMajorForXandY;
                     preferredLayout = RowMajor;
@@ -1005,6 +1029,8 @@ namespace superbblas {
     private:
         void matvec(T alpha, bool conjA, const T *x, IndexType ldx, MatrixLayout lx, T *y,
                     IndexType ldy, MatrixLayout ly, IndexType ncols, T beta = T{0}) const {
+            if (allowedOperator == HighLevel) throw std::runtime_error("Unexpected operator()");
+
             // Check layout
             if ((allowLayout == SameLayoutForXAndY && lx != ly) ||
                 ((allowLayout == ColumnMajorForY || allowLayout == ColumnMajorForXandY) &&
@@ -1152,6 +1178,7 @@ namespace superbblas {
                             vector<T, Gpu> &vy_, IndexType ldy, MatrixLayout ly,
                             IndexType ncols) const {
 
+                if (allowedOperator == HighLevel) throw std::runtime_error("Unexpected operator()");
                 const T alpha{1};
                 bool is_kron = v.kron_it.size() > 0;
                 check_same_device(vx_.ctx(), vy_.ctx());
@@ -1355,6 +1382,7 @@ namespace superbblas {
             void operator()(const Order<Ni> &oim, const Order<Nd> &odm, const Coor<Nx> &dimx,
                             const Order<Nx> &ox, const vector<T, Gpu> &vx_, const Coor<Ny> &dimy,
                             const Order<Ny> &oy, vector<T, Gpu> &vy_) const {
+                if (allowedOperator == LowLevel) throw std::runtime_error("Unexpected operator()");
                 if (v.kron_it.size() > 0) throw std::runtime_error("Not implemented");
 
                 check_same_device(vx_.ctx(), vy_.ctx());
@@ -2327,7 +2355,7 @@ namespace superbblas {
                 throw std::runtime_error(
                     "Unsupported layout for the input and output dense tensors");
 
-            if (lx == Any) {
+            if (lx == Any || bsr.allowedOperator == HighLevel) {
                 bsr(oim, odm, dimx, ox, vx, dimy, oy, vy);
             } else {
                 std::size_t vold = volume(bsr.v.dimd), voli = volume(bsr.v.dimi);
