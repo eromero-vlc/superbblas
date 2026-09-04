@@ -289,7 +289,21 @@ namespace superbblas {
         template <typename T, typename Q, typename IteratorV, typename IteratorW>
         void copy_n_same_dev_thrust(const IteratorV &itv, std::size_t n, const IteratorW &itw,
                                     EWOp::Copy, Gpu gpu) {
-            thrust::copy_n(thrust_par_on(gpu), itv, n, itw);
+            for (int attempt = 0; attempt < 2; ++attempt) {
+                try {
+                    thrust::copy_n(thrust_par_on(gpu), itv, n, itw);
+                    break;
+                } catch (...) {
+                    if (attempt == 0) {
+                        sync(gpu);
+                        sync(getAllocStream(gpu));
+                        syncLegacyStream(gpu);
+                        clearInternalCaches(gpu);
+                    } else {
+                        throw;
+                    }
+                }
+            }
         }
 
         template <typename T, typename Q, typename IteratorV, typename IteratorW>
@@ -385,7 +399,21 @@ namespace superbblas {
                 setDevice(xpu);
                 auto itv = thrust::make_permutation_iterator(encapsulate_pointer(v),
                                                              encapsulate_pointer(indices));
-                thrust::fill_n(thrust_par_on(xpu), itv, n, T{0});
+                for (int attempt = 0; attempt < 2; ++attempt) {
+                    try {
+                        thrust::fill_n(thrust_par_on(xpu), itv, n, T{0});
+                        break;
+                    } catch (...) {
+                        if (attempt == 0) {
+                            sync(xpu);
+                            sync(getAllocStream(xpu));
+                            syncLegacyStream(xpu);
+                            clearInternalCaches(xpu);
+                        } else {
+                            throw;
+                        }
+                    }
+                }
             }
         }
 
@@ -923,30 +951,45 @@ namespace superbblas {
                     },
                     xpuv);
             } else {
-                if (indicesv == nullptr && indicesw != nullptr) {
-                    thrust::for_each_n(
-                        thrust_par_on(xpuv), thrust::make_counting_iterator(IndexType(0)),
-                        blocking * n,
-                        copy_n_blocking_elem_w<IndexType, typename cuda_complex<T>::type,
-                                               typename cuda_complex<Q>::type, EWOP>(
-                            alpha, (typename cuda_complex<T>::type *)v, blocking,
-                            (typename cuda_complex<Q>::type *)w, indicesw));
-                } else if (indicesv != nullptr && indicesw == nullptr) {
-                    thrust::for_each_n(
-                        thrust_par_on(xpuv), thrust::make_counting_iterator(IndexType(0)),
-                        blocking * n,
-                        copy_n_blocking_elem_v<IndexType, typename cuda_complex<T>::type,
-                                               typename cuda_complex<Q>::type, EWOP>(
-                            alpha, (typename cuda_complex<T>::type *)v, blocking, indicesv,
-                            (typename cuda_complex<Q>::type *)w));
-                } else {
-                    thrust::for_each_n(
-                        thrust_par_on(xpuv), thrust::make_counting_iterator(IndexType(0)),
-                        blocking * n,
-                        copy_n_blocking_elem_v_and_w<IndexType, typename cuda_complex<T>::type,
-                                                     typename cuda_complex<Q>::type, EWOP>(
-                            alpha, (typename cuda_complex<T>::type *)v, blocking, indicesv,
-                            (typename cuda_complex<Q>::type *)w, indicesw));
+                for (int attempt = 0; attempt < 2; ++attempt) {
+                    try {
+                        if (indicesv == nullptr && indicesw != nullptr) {
+                            thrust::for_each_n(
+                                thrust_par_on(xpuv), thrust::make_counting_iterator(IndexType(0)),
+                                blocking * n,
+                                copy_n_blocking_elem_w<IndexType, typename cuda_complex<T>::type,
+                                                       typename cuda_complex<Q>::type, EWOP>(
+                                    alpha, (typename cuda_complex<T>::type *)v, blocking,
+                                    (typename cuda_complex<Q>::type *)w, indicesw));
+                        } else if (indicesv != nullptr && indicesw == nullptr) {
+                            thrust::for_each_n(
+                                thrust_par_on(xpuv), thrust::make_counting_iterator(IndexType(0)),
+                                blocking * n,
+                                copy_n_blocking_elem_v<IndexType, typename cuda_complex<T>::type,
+                                                       typename cuda_complex<Q>::type, EWOP>(
+                                    alpha, (typename cuda_complex<T>::type *)v, blocking, indicesv,
+                                    (typename cuda_complex<Q>::type *)w));
+                        } else {
+                            thrust::for_each_n(
+                                thrust_par_on(xpuv), thrust::make_counting_iterator(IndexType(0)),
+                                blocking * n,
+                                copy_n_blocking_elem_v_and_w<IndexType,
+                                                             typename cuda_complex<T>::type,
+                                                             typename cuda_complex<Q>::type, EWOP>(
+                                    alpha, (typename cuda_complex<T>::type *)v, blocking, indicesv,
+                                    (typename cuda_complex<Q>::type *)w, indicesw));
+                        }
+                        break;
+                    } catch (...) {
+                        if (std::is_same<EWOP, EWOp::Copy>::value && attempt == 0) {
+                            sync(xpuv);
+                            sync(getAllocStream(xpuv));
+                            syncLegacyStream(xpuv);
+                            clearInternalCaches(xpuv);
+                        } else {
+                            throw;
+                        }
+                    }
                 }
             }
             causalConnectTo(xpuv, xpuw);

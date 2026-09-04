@@ -968,16 +968,33 @@ namespace superbblas {
 		vol = vol / size[i];
             }
 
-            thrust::transform(thrust_par_on(gpu), thrust::make_counting_iterator(IndexType(0)),
-                              thrust::make_counting_iterator(IndexType(vol)),
-                              encapsulate_pointer(indices.data()),
-                              perm_elem<IndexType, Nd>(toTCoor(from), toTCoor(size), toTCoor(dim),
-                                                       toTCoor(size_strides), toTCoor(strides)));
+            for (int attempt = 0; attempt < 2; ++attempt) {
+                try {
+                    thrust::transform(
+                        thrust_par_on(gpu), thrust::make_counting_iterator(IndexType(0)),
+                        thrust::make_counting_iterator(IndexType(vol)),
+                        encapsulate_pointer(indices.data()),
+                        perm_elem<IndexType, Nd>(toTCoor(from), toTCoor(size), toTCoor(dim),
+                                                 toTCoor(size_strides), toTCoor(strides)));
 
-            thrust::transform(thrust_par_on(gpu), thrust::make_counting_iterator(IndexType(vol)),
-                              thrust::make_counting_iterator(IndexType(vol * block)),
-                              encapsulate_pointer(indices.data() + vol),
-                              perm_elem_rest<IndexType>(vol, indices.data()));
+                    thrust::transform(thrust_par_on(gpu),
+                                      thrust::make_counting_iterator(IndexType(vol)),
+                                      thrust::make_counting_iterator(IndexType(vol * block)),
+                                      encapsulate_pointer(indices.data() + vol),
+                                      perm_elem_rest<IndexType>(vol, indices.data()));
+
+                    break;
+                } catch (...) {
+                    if (attempt == 0) {
+                        sync(gpu);
+                        sync(getAllocStream(gpu));
+                        syncLegacyStream(gpu);
+                        clearInternalCaches(gpu);
+                    } else {
+                        throw;
+                    }
+                }
+            }
 
             return indices;
         }
