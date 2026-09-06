@@ -1674,10 +1674,10 @@ namespace superbblas {
                     wait(copy_request(alpha, Proc_ranges<Nd0>(1, p0), from0, size0, dim0, o0, v0,
                                       Proc_ranges<Nd1>(1, allreduce_ranges), from1, dim1, o1, vb,
                                       get_comm(), EWOP{}, co, false));
-                    sync(buffer.ctx());
                 }
 
                 // Do the MPI communication
+                sync(buffer.ctx());
                 static MPI_Datatype dtype = get_mpi_datatype(sizeof(Q));
                 if (buffer.size() > (std::size_t)std::numeric_limits<int>::max())
                     throw std::runtime_error("allreduce: too many elements to broadcast ");
@@ -1704,10 +1704,10 @@ namespace superbblas {
                     wait(copy_request(alpha, Proc_ranges<Nd0>(1, p0), from0, size0, dim0, o0, v0,
                                       Proc_ranges<Nd1>(1, allreduce_ranges), from1, dim1, o1, vb,
                                       get_comm(), EWOP{}, co, false));
-                    sync(buffer.ctx());
                 }
 
                 // Do the MPI communication
+                sync(buffer.ctx());
                 MPI_Datatype dtype = get_mpi_datatype_for_reduction<Q>();
                 const int factor = (is_complex<Q>::value ? 2 : 1);
                 if (buffer.size() * factor > (std::size_t)std::numeric_limits<int>::max())
@@ -1737,10 +1737,10 @@ namespace superbblas {
                     wait(copy_request(alpha, Proc_ranges<Nd0>(1, p0), from0, size0, dim0, o0, v0,
                                       Proc_ranges<Nd1>(1, allreduce_ranges), from1, dim1, o1, vb,
                                       get_comm(), EWOP{}, co, false));
-                    sync(buffer.ctx());
                 }
 
                 // Do the MPI communication
+                sync(buffer.ctx());
                 MPI_Datatype dtype = get_mpi_datatype_for_reduction<Q>();
                 const int factor = (is_complex<Q>::value ? 2 : 1);
                 if (buffer.size() * factor > (std::size_t)std::numeric_limits<int>::max())
@@ -1780,6 +1780,7 @@ namespace superbblas {
                 }
 
                 // Copy back to v1
+                if (deviceId(buffer.ctx()) >= 0) syncLegacyStream(buffer.ctx());
                 wait(copy_request(Q{1}, Proc_ranges<Nd1>(1, allreduce_ranges), from1, size1, dim1,
                                   o1, toConst(vb), Proc_ranges<Nd1>(1, p1), from1, dim1, o1, v1,
                                   get_comm(), EWOP{}, co, false));
@@ -2061,18 +2062,21 @@ namespace superbblas {
                 if (volume(allreduce_ranges) * sizeof(Q) <= getMaxGpuCacheSize()) {
                     // Make the sender/receiver buffers on host pinned memory to improve the transfer rates copying
                     // data from/to the gpus
-                    Gpu gpu0;
                     if (v0.first.size() > 0 && v0.first.front().it.size() > 0) {
-                        gpu0 = v0.first.front().it.ctx().toCpuPinned();
+                        if (v1.first.size() > 0 && v1.first.front().it.size() > 0) {
+                            return allreduce(alpha, p0, from0, size0, dim0, o0, v0, p1, from1, dim1,
+                                             o1, v1, allreduce_ranges, do_comm_pattern, comm,
+                                             EWOP{}, co, v1.first.front().it.ctx().toCpuPinned());
+                        } else {
+                            return allreduce(alpha, p0, from0, size0, dim0, o0, v0, p1, from1, dim1,
+                                             o1, v1, allreduce_ranges, do_comm_pattern, comm,
+                                             EWOP{}, co, Cpu{});
+                        }
                     } else if (v1.first.size() > 0 && v1.first.front().it.size() > 0) {
-                        gpu0 = v1.first.front().it.ctx().toCpuPinned();
-                    } else {
                         return allreduce(alpha, p0, from0, size0, dim0, o0, v0, p1, from1, dim1, o1,
                                          v1, allreduce_ranges, do_comm_pattern, comm, EWOP{}, co,
-                                         Cpu{});
+                                         v1.first.front().it.ctx().toCpuPinned());
                     }
-                    return allreduce(alpha, p0, from0, size0, dim0, o0, v0, p1, from1, dim1, o1, v1,
-                                     allreduce_ranges, do_comm_pattern, comm, EWOP{}, co, gpu0);
                 }
 #endif // SUPERBBLAS_USE_GPU
                 return allreduce(alpha, p0, from0, size0, dim0, o0, v0, p1, from1, dim1, o1, v1,
