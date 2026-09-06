@@ -1,6 +1,7 @@
 #include "superbblas.h"
 #include <cstdlib>
 #include <iostream>
+#include <random>
 #include <vector>
 
 using namespace superbblas;
@@ -30,9 +31,10 @@ static char progress_mark = 0;
 constexpr std::size_t no_test = std::numeric_limits<std::size_t>::max();
 static std::size_t test_number = 0;
 static std::size_t do_test = no_test;
+static std::mt19937 random_gen;
 
 void initialize_test() {
-    std::srand(0);
+    random_gen.seed();
     progress = 0;
     progress_mark = 0;
     test_number = 0;
@@ -75,7 +77,8 @@ void test_contraction(const T &alpha, Operator<N0, T> op0, Operator<N1, T> op1, 
 
 template <std::size_t N> Coor<N> random_from() {
     Coor<N> r;
-    for (std::size_t i = 0; i < N; ++i) r[i] = (std::rand() % 2 == 0 ? 0 : 1);
+    std::bernoulli_distribution d(0.5);
+    for (std::size_t i = 0; i < N; ++i) r[i] = (d(random_gen) ? 0 : 1);
     return r;
 }
 
