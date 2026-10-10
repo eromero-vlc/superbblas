@@ -20,7 +20,7 @@
 #ifndef SUPERBBLAS_LIB
 #    ifdef SUPERBBLAS_USE_XSIMD
 #        include "xsimd/xsimd.hpp"
-#    elif __cplusplus >= 202002L
+#    elif defined(SUPERBBLAS_USE_SIMD) && __cplusplus >= 202002L
 #        include <experimental/simd>
 #    endif
 #endif
