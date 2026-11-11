@@ -82,7 +82,7 @@ endif
 $(SOURCE_LIB): $(LIB_SOURCE_STEM).split
 
 $(LIB_SOURCE_STEM).split: $(LIB_SOURCE_STEM)
-	split -d -n l/10 -a 1 $< $(LIB_SOURCE_STEM)_
+	tools/split $< $(LIB_SOURCE_STEM)_
 	for i in $(LIB_SOURCE_STEM)_? ; do \
 		( \
 			echo "// This file is generated automatically. Please, do not modify"; \

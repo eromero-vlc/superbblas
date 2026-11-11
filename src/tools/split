@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Usage: split <input file> <stem>
+# Split the lines of <input file> into 10 files <stem>0, ..., <stem>9
+
+input="$1"
+output="$2"
+
+# Pass 1: count the lines
+total=0
+while IFS= read -r line || [[ -n $line ]]; do
+  total=$(( total + 1 ))
+done < "$input"
+
+per_file=$(( (total + 9) / 10 ))   # ceiling division
+
+# Open 10 output files on file descriptors 10-19
+for i in {0..9}; do
+  eval "exec $((10 + i))>\"${output}$i\""
+done
+
+# Pass 2: write consecutive chunks
+n=0
+while IFS= read -r line || [[ -n $line ]]; do
+  printf '%s\n' "$line" >&$(( 10 + n / per_file ))
+  n=$(( n + 1 ))
+done < "$input"
+
+# Close the descriptors
+for i in {0..9}; do
+  eval "exec $((10 + i))>&-"
+done
